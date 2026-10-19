@@ -1,15 +1,24 @@
-// Not covered: edits, deletes, payments and member removal (not built yet), writers racing each other, or the
+// Not covered: expense edits and deletes and member removal (not built yet), writers racing each other, or the
 // database role that should forbid changing events (a deploy setting, not code).
-import { balances, currency, formatAmount, formatRate, type Currency, type Entry, type Split } from "@penny/core";
-import { asc, eq } from "drizzle-orm";
+import {
+  balances,
+  currency,
+  formatAmount,
+  formatRate,
+  type Currency,
+  type Entry,
+  type Rate,
+  type Split,
+} from "@penny/core";
+import { asc, count, eq } from "drizzle-orm";
 import fc from "fast-check";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { type Db, setDbForTests } from "@/db/client";
 import { events } from "@/db/schema";
 import { createTestDb } from "@/db/testing";
-import type { AddExpenseRequest, GroupView, SplitRequest } from "@/lib/api-types";
-import type { ExpenseAddedPayload } from "@/lib/ledger-store";
-import { postExpense, readGroup, startGroup } from "./fixtures";
+import type { AddExpenseRequest, AddPaymentRequest, AddPaymentResponse, GroupView, SplitRequest } from "@/lib/api-types";
+import type { ExpenseAddedPayload, PaymentAddedPayload, PaymentDeletedPayload } from "@/lib/ledger-store";
+import { deletePayment, postExpense, postPayment, readGroup, startGroup } from "./fixtures";
 
 vi.mock("next/server", () => ({ connection: async () => undefined }));
 
@@ -41,12 +50,19 @@ function splitFrom(payload: ExpenseAddedPayload): Split {
   return { mode: "exact", parts: payload.parts.map((part) => ({ memberId: part.memberId, amount: BigInt(part.weight) })) };
 }
 
+function rateFrom(units: string | null, scale: string | null): Rate | null {
+  return units === null ? null : { units: BigInt(units), scale: Number(scale) };
+}
+
+type Rebuilt = { base: Currency; totals: ReadonlyMap<string, bigint>; expenses: number; payments: string[] };
+
 // Reads the events table and nothing else, so it checks the current-state tables instead of repeating them.
-async function replay(groupId: string): Promise<{ base: Currency; totals: ReadonlyMap<string, bigint>; expenses: number }> {
+async function replay(groupId: string): Promise<Rebuilt> {
   const log = await db.select().from(events).where(eq(events.groupId, groupId)).orderBy(asc(events.seq));
   let base: Currency | null = null;
   const people: { id: string; position: number }[] = [];
-  const entries: Entry[] = [];
+  const spent: Entry[] = [];
+  const livePayments = new Map<string, Entry>();
   for (const event of log) {
     if (event.kind === "group_created") {
       base = known((event.payload as { baseCurrency: string }).baseCurrency);
@@ -55,36 +71,53 @@ async function replay(groupId: string): Promise<{ base: Currency; totals: Readon
       people.push({ id: memberId, position });
     } else if (event.kind === "expense_added") {
       const payload = event.payload as ExpenseAddedPayload;
-      entries.push({
+      spent.push({
         kind: "expense",
         id: payload.expenseId,
         paidBy: payload.paidBy,
         currency: known(payload.currency),
         amount: BigInt(payload.amountMinor),
-        rate:
-          payload.rateUnits === null ? null : { units: BigInt(payload.rateUnits), scale: Number(payload.rateScale) },
+        rate: rateFrom(payload.rateUnits, payload.rateScale),
         split: splitFrom(payload),
       });
+    } else if (event.kind === "payment_added") {
+      const payload = event.payload as PaymentAddedPayload;
+      livePayments.set(payload.paymentId, {
+        kind: "payment",
+        id: payload.paymentId,
+        from: payload.from,
+        to: payload.to,
+        currency: known(payload.currency),
+        amount: BigInt(payload.amountMinor),
+        rate: rateFrom(payload.rateUnits, payload.rateScale),
+      });
+    } else if (event.kind === "payment_deleted") {
+      const { paymentId } = event.payload as PaymentDeletedPayload;
+      if (!livePayments.delete(paymentId)) throw new Error(`payment_deleted for a payment that is not live: ${paymentId}`);
     } else {
       throw new Error(`unexpected event ${event.kind}`);
     }
   }
   if (base === null) throw new Error("no group_created event");
   const order = people.sort((a, b) => a.position - b.position).map((person) => person.id);
-  const totals = balances(base, order, entries);
+  const totals = balances(base, order, [...spent, ...livePayments.values()]);
   if (!totals.ok) throw new Error(`the log does not replay: ${totals.error}`);
-  return { base, totals: totals.value, expenses: entries.length };
+  return { base, totals: totals.value, expenses: spent.length, payments: [...livePayments.keys()] };
 }
 
 const step = fc.record({
-  retry: fc.boolean(),
+  action: fc.constantFrom("expense", "payment", "undo"),
+  // One step in four repeats the one before, so most steps are new and an undo usually has a payment to find.
+  retry: fc.nat({ max: 3 }).map((n) => n === 0),
   currency: fc.constantFrom(...CODES),
   amountMinor: fc.bigInt({ min: BigInt(1), max: BigInt(1_000_000) }),
   rateUnits: fc.bigInt({ min: BigInt(1), max: BigInt(100_000) }),
   rateScale: fc.integer({ min: 2, max: 6 }),
   payer: fc.nat({ max: NAMES.length - 1 }),
+  payee: fc.nat({ max: NAMES.length - 1 }),
   mode: fc.constantFrom("equal", "shares", "exact"),
   weights: fc.array(fc.integer({ min: 0, max: 4 }), { minLength: NAMES.length, maxLength: NAMES.length }),
+  pick: fc.nat({ max: 20 }),
 });
 
 type Step = typeof step extends fc.Arbitrary<infer T> ? T : never;
@@ -119,7 +152,34 @@ function requestFor(group: GroupView, s: Step): AddExpenseRequest {
   };
 }
 
-it("rebuilds the balances GroupView shows from the events table alone, after any sequence of adds", async () => {
+// From and to can be the same member, a request the API must refuse with self_payment.
+function paymentFor(group: GroupView, s: Step): AddPaymentRequest {
+  const ids = group.members.map((member) => member.id);
+  const cur = known(s.currency);
+  return {
+    clientId: `replay-${crypto.randomUUID()}`,
+    from: ids[s.payer % ids.length],
+    to: ids[s.payee % ids.length],
+    amount: formatAmount(s.amountMinor, cur),
+    currency: s.currency,
+    rate: s.currency === group.baseCurrency ? null : formatRate({ units: s.rateUnits, scale: s.rateScale }),
+  };
+}
+
+type Sent =
+  | { kind: "expense"; body: AddExpenseRequest }
+  | { kind: "payment"; body: AddPaymentRequest }
+  | { kind: "undo"; paymentId: string; status: 200 | 404 };
+
+function sentFor(group: GroupView, s: Step, made: readonly string[]): Sent {
+  if (s.action === "expense") return { kind: "expense", body: requestFor(group, s) };
+  if (s.action === "payment") return { kind: "payment", body: paymentFor(group, s) };
+  // An undo picks any payment made so far, live or already undone; with none made yet it names an id nobody has.
+  if (made.length === 0) return { kind: "undo", paymentId: crypto.randomUUID(), status: 404 };
+  return { kind: "undo", paymentId: made[s.pick % made.length], status: 200 };
+}
+
+it("rebuilds the balances GroupView shows from the events table alone, after any sequence of adds, payments and undos", async () => {
   let stored = 0;
   const runs = 40;
 
@@ -127,16 +187,28 @@ it("rebuilds the balances GroupView shows from the events table alone, after any
     fc.asyncProperty(
       fc.constantFrom(...CODES),
       fc.integer({ min: 2, max: NAMES.length }),
-      fc.array(step, { minLength: 1, maxLength: 8 }),
+      fc.array(step, { minLength: 1, maxLength: 12 }),
       async (base, size, steps) => {
         const { token, group } = await startGroup({ baseCurrency: base, members: NAMES.slice(0, size) });
-        let previous: AddExpenseRequest | null = null;
+        const made: string[] = [];
+        let previous: Sent | null = null;
         for (const s of steps) {
-          const body: AddExpenseRequest = s.retry && previous !== null ? previous : requestFor(group, s);
-          const response = await postExpense(token, body);
-          expect([200, 201, 400]).toContain(response.status);
-          if (response.status === 201) stored += 1;
-          previous = body;
+          const sent: Sent = s.retry && previous !== null ? previous : sentFor(group, s, made);
+          if (sent.kind === "expense") {
+            const response = await postExpense(token, sent.body);
+            expect([200, 201, 400]).toContain(response.status);
+            if (response.status === 201) stored += 1;
+          } else if (sent.kind === "payment") {
+            const response = await postPayment(token, sent.body);
+            expect([200, 201, 400]).toContain(response.status);
+            if (response.status === 201) {
+              stored += 1;
+              made.push(((await response.json()) as AddPaymentResponse).payment.id);
+            }
+          } else {
+            expect((await deletePayment(token, sent.paymentId)).status).toBe(sent.status);
+          }
+          previous = sent;
         }
 
         const view = await readGroup(token);
@@ -150,12 +222,19 @@ it("rebuilds the balances GroupView shows from the events table alone, after any
         );
         expect(view.settlement.expenseCount).toBe(rebuilt.expenses);
         expect(view.expenses).toHaveLength(rebuilt.expenses);
+        expect(view.payments.map((payment) => payment.id).sort()).toEqual([...rebuilt.payments].sort());
         expect(view.total).toBe(formatAmount(BigInt(0), rebuilt.base));
       },
     ),
     { numRuns: runs },
   );
 
-  // Guards against a run where every generated request was refused and the property held trivially.
+  // Guards against runs where every request was refused, or no payment was ever made or undone, so the property
+  // held without testing anything.
   expect(stored).toBeGreaterThan(runs);
+  const [added] = await db.select({ n: count() }).from(events).where(eq(events.kind, "payment_added"));
+  const [deleted] = await db.select({ n: count() }).from(events).where(eq(events.kind, "payment_deleted"));
+  // A simulation of this generator over 20,000 suites averaged 19 undos of a live payment and never went under 5.
+  expect(added.n).toBeGreaterThan(runs / 4);
+  expect(deleted.n).toBeGreaterThan(runs / 20);
 }, 180_000);

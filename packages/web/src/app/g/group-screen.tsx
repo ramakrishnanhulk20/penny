@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useState, useSyncExternalStore } from "react";
-import type { GroupView } from "@/lib/api-types";
-import { getGroup } from "@/lib/client/api";
-import { FALLBACK_MESSAGE } from "@/lib/client/messages";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { FieldError } from "@/components/field-error";
+import type { GroupView, TransferView } from "@/lib/api-types";
+import { addPayment, getGroup, undoPayment, type ApiResult } from "@/lib/client/api";
+import { FALLBACK_MESSAGE, messageFor } from "@/lib/client/messages";
 import { ExpenseForm } from "./expense-form";
 
 // The format lib/group-token.ts checks on the server, repeated here because that module needs node:crypto.
@@ -90,6 +91,15 @@ function proofLine(payments: number, expenses: number): string {
   return `${paymentWords} ${payments === 1 ? "settles" : "settle"} ${expenseWords}.`;
 }
 
+// The same line on the same group version always gives the same clientId, so a double press, a retry after a lost
+// answer, or two people pressing one line at once records one payment. The server moves the version with every new
+// payment, so a key is never shown again once its payment exists. Hex SHA-256 is 64 characters, the API's maximum.
+async function settleClientId(version: number, transfer: TransferView): Promise<string> {
+  const text = `settle:${version}:${transfer.from}:${transfer.to}:${transfer.amount}`;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function CopyLinkButton({ link, testId }: { readonly link: string; readonly testId?: string }) {
   const [copies, setCopies] = useState(0);
 
@@ -142,9 +152,52 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
   const { token, group, link, created, you } = ready;
   const youId = useId();
   const linkId = useId();
+  const paymentErrorId = useId();
+  const [paymentPending, setPaymentPending] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | undefined>(undefined);
+  // A second press can land before React re-renders the disabled buttons, so the guard lives outside render.
+  const paymentInFlight = useRef(false);
   const base = group.baseCurrency;
   const names = new Map(group.members.map((member) => [member.id, member.name]));
   const transfers = group.settlement.transfers;
+
+  // One payment action at a time: every settle-up line belongs to the plan on screen and paying one can change the
+  // others, and two answers arriving out of order could put an older group back on screen.
+  async function runPaymentAction(action: () => Promise<ApiResult<{ readonly group: GroupView }>>) {
+    if (paymentInFlight.current) return;
+    paymentInFlight.current = true;
+    setPaymentPending(true);
+    setPaymentError(undefined);
+    let result: ApiResult<{ readonly group: GroupView }>;
+    try {
+      result = await action();
+    } catch {
+      // The API calls never throw, so this is hashing the clientId failing (crypto.subtle needs a secure context),
+      // before any request left.
+      result = { ok: false, error: "internal" };
+    }
+    paymentInFlight.current = false;
+    setPaymentPending(false);
+    if (result.ok) onSaved(result.data.group);
+    else setPaymentError(messageFor(result.error));
+  }
+
+  function markPaid(transfer: TransferView) {
+    void runPaymentAction(async () =>
+      addPayment(token, {
+        clientId: await settleClientId(group.version, transfer),
+        from: transfer.from,
+        to: transfer.to,
+        amount: transfer.amount,
+        currency: base,
+        rate: null,
+      }),
+    );
+  }
+
+  function undo(paymentId: string) {
+    void runPaymentAction(() => undoPayment(token, paymentId));
+  }
 
   return (
     <>
@@ -203,13 +256,22 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
             <ul>
               {transfers.map((transfer, index) => (
                 <li key={`${index}:${transfer.from}:${transfer.to}`} data-testid="settle-line">
-                  {`${names.get(transfer.from) ?? ""} pays ${names.get(transfer.to) ?? ""} ${transfer.amount} ${base}`}
+                  {`${names.get(transfer.from) ?? ""} pays ${names.get(transfer.to) ?? ""} ${transfer.amount} ${base}`}{" "}
+                  <button
+                    type="button"
+                    disabled={paymentPending}
+                    onClick={() => markPaid(transfer)}
+                    data-testid="settle-mark-paid"
+                  >
+                    Mark as paid
+                  </button>
                 </li>
               ))}
             </ul>
             <p data-testid="settle-proof">{proofLine(transfers.length, group.settlement.expenseCount)}</p>
           </>
         )}
+        <FieldError id={paymentErrorId} message={paymentError} />
       </section>
 
       <section>
@@ -232,6 +294,29 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
                 {expense.currency !== base && expense.rate !== null && (
                   <div>{`= ${expense.baseAmount} ${base} at ${expense.rate}`}</div>
                 )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section>
+        <h2>Payments</h2>
+        {group.payments.length === 0 ? (
+          <p>No payments yet.</p>
+        ) : (
+          <ul>
+            {group.payments.map((payment) => (
+              <li key={payment.id} data-testid="payment-row">
+                {`${names.get(payment.from) ?? ""} paid ${names.get(payment.to) ?? ""} ${payment.baseAmount} ${base}`}{" "}
+                <button
+                  type="button"
+                  disabled={paymentPending}
+                  onClick={() => undo(payment.id)}
+                  data-testid="payment-undo"
+                >
+                  Undo
+                </button>
               </li>
             ))}
           </ul>

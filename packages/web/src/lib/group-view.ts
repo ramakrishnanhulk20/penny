@@ -9,10 +9,11 @@ import {
   settle,
   type Currency,
 } from "@penny/core";
+import { eq } from "drizzle-orm";
 import type { Db } from "../db/client";
-import type { GroupRow } from "../db/schema";
-import type { ExpenseView, GroupView } from "./api-types";
-import { loadLedger, type LedgerExpense } from "./ledger-store";
+import { groups, type GroupRow } from "../db/schema";
+import type { ExpenseView, GroupView, PaymentView } from "./api-types";
+import { loadLedger, type LedgerExpense, type LedgerPayment } from "./ledger-store";
 
 function expenseView(item: LedgerExpense, base: Currency, known: ReadonlySet<string>): ExpenseView {
   const { entry } = item;
@@ -40,23 +41,46 @@ function expenseView(item: LedgerExpense, base: Currency, known: ReadonlySet<str
   };
 }
 
+function paymentView(item: LedgerPayment, base: Currency, known: ReadonlySet<string>): PaymentView {
+  const { entry } = item;
+  const inBase = entryInBase(entry, base, known);
+  if (!inBase.ok) throw new Error("stored_payment_invalid");
+  return {
+    id: entry.id,
+    from: entry.from,
+    to: entry.to,
+    currency: entry.currency.code,
+    amount: formatAmount(entry.amount, entry.currency),
+    rate: entry.rate === null ? null : formatRate(entry.rate),
+    baseAmount: formatAmount(inBase.value.baseTotal, base),
+    createdAt: item.createdAt.toISOString(),
+  };
+}
+
 /**
- * The whole group as the page shows it: current members in position order, one balance each, the settle-up plan
- * and the live expenses newest first, every amount formatted by @penny/core.
+ * The whole group as the page shows it: current members in position order, one balance each, the settle-up plan,
+ * and the live expenses and live payments newest first, every amount formatted by @penny/core.
  * All reads run in one read-only, repeatable-read transaction, so the view is one consistent moment and this path
  * cannot write. Throws if the balances or the plan fail their own sum checks; such a view is never returned.
  */
 export async function buildGroupView(db: Db, group: GroupRow): Promise<GroupView> {
   const base = currency(group.baseCurrency);
   if (base === null) throw new Error("stored_currency_invalid");
-  const ledger = await db.transaction((tx) => loadLedger(tx, group.id), {
-    isolationLevel: "repeatable read",
-    accessMode: "read only",
-  });
+  const { version, ledger } = await db.transaction(
+    async (tx) => {
+      // Read in the same snapshot as the entries rather than taken from `group`: the settle-up buttons key their
+      // clientIds on this version, so it must belong to exactly the payments shown.
+      const [row] = await tx.select({ version: groups.version }).from(groups).where(eq(groups.id, group.id));
+      if (row === undefined) throw new Error("group_missing");
+      return { version: row.version, ledger: await loadLedger(tx, group.id) };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
 
   // Removed members stay in the sums so their history still adds up; they are only left out of what is shown.
   const everyone = ledger.members.map((member) => member.id);
-  const totals = balances(base, everyone, [...ledger.expenses.map((item) => item.entry), ...ledger.payments]);
+  const entries = [...ledger.expenses.map((item) => item.entry), ...ledger.payments.map((item) => item.entry)];
+  const totals = balances(base, everyone, entries);
   if (!totals.ok) throw new Error(`stored_ledger_invalid_${totals.error}`);
   const transfers = settle(totals.value);
 
@@ -71,7 +95,7 @@ export async function buildGroupView(db: Db, group: GroupRow): Promise<GroupView
     name: group.name,
     baseCurrency: base.code,
     baseDigits: base.digits,
-    version: group.version,
+    version,
     members: current.map((member) => ({ id: member.id, name: member.name })),
     balances: shown.map((row) => ({ memberId: row.memberId, amount: formatAmount(row.amount, base) })),
     total: formatAmount(total, base),
@@ -84,5 +108,6 @@ export async function buildGroupView(db: Db, group: GroupRow): Promise<GroupView
       expenseCount: ledger.expenses.length,
     },
     expenses: ledger.expenses.map((item) => expenseView(item, base, known)),
+    payments: ledger.payments.map((item) => paymentView(item, base, known)),
   };
 }

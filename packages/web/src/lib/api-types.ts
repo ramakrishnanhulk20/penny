@@ -23,6 +23,17 @@ export type ExpenseView = {
 
 export type TransferView = { from: string; to: string; amount: string };
 
+export type PaymentView = {
+  id: string;
+  from: string;
+  to: string;
+  currency: string;
+  amount: string;
+  rate: string | null;
+  baseAmount: string;
+  createdAt: string;
+};
+
 export type GroupView = {
   id: string;
   name: string;
@@ -34,6 +45,8 @@ export type GroupView = {
   total: string;
   settlement: { transfers: TransferView[]; expenseCount: number };
   expenses: ExpenseView[];
+  /** Live payments, newest first. */
+  payments: PaymentView[];
 };
 
 export type CreateGroupRequest = { name: string; baseCurrency: string; members: string[] };
@@ -54,5 +67,16 @@ export type AddExpenseRequest = {
   split: SplitRequest;
 };
 export type AddExpenseResponse = { expense: ExpenseView; group: GroupView };
+
+export type AddPaymentRequest = {
+  clientId: string;
+  from: string;
+  to: string;
+  amount: string;
+  currency: string;
+  rate: string | null;
+};
+export type AddPaymentResponse = { payment: PaymentView; group: GroupView };
+export type UndoPaymentResponse = { group: GroupView };
 
 export type ApiError = { error: { code: string } };
