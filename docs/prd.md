@@ -46,7 +46,7 @@ Top: the group name, "Balances in <BASE>" (for example "Balances in EUR"), and t
 **Settle up** section:
 - When everyone is at zero: "Everyone is settled up."
 - Otherwise one line per payment: "<From> pays <To> <amount> <BASE>", each with a "Mark as paid" button. "Mark as paid" records that payment; the balances and the plan update at once.
-- Under the list: "<N> payments settle <M> expenses." (the proof line).
+- Under the list: "<N> payments settle <M> expenses." (the proof line; "1 payment settles" for one).
 
 **Add an expense** form:
 - "What was it for?": required, 1 to 80 characters.
@@ -57,7 +57,7 @@ Top: the group name, "Balances in <BASE>" (for example "Balances in EUR"), and t
 - "Split": three choices.
   - "Equally": a checkbox per member, all ticked by default; the amount is divided equally among ticked members, with any leftover cents going to the members listed first.
   - "By shares": a whole number per member (for example 2 for a couple, 1 for a single), 0 to leave someone out.
-  - "Exact amounts": an amount per member; a live line shows "<remaining> left to assign" or "<excess> over the total".
+  - "Exact amounts": an amount per member; a live line shows "<remaining> <CUR> left to assign" or "<excess> <CUR> over the total".
 - A live preview lists each member's share before saving.
 - Button: "Add expense".
 - Errors:
@@ -68,6 +68,7 @@ Top: the group name, "Balances in <BASE>" (for example "Balances in EUR"), and t
   - "That amount is too large."
   - "That amount is too small to convert."
   - "Choose at least one person to split with."
+  - "Shares are whole numbers from 0 to 1000."
   - "Enter a rate like 0.92."
   - "The exact amounts must add up to <total> <CUR>."
   - "Enter the rate to <BASE>."
