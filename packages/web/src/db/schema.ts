@@ -3,6 +3,7 @@ import {
   bigint,
   char,
   check,
+  date,
   foreignKey,
   integer,
   jsonb,
@@ -169,6 +170,28 @@ export const checksSnapshot = pgTable(
     fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
   },
   (t) => [check("checks_snapshot_single_row", sql`${t.id} = 1`)],
+);
+
+// Shared by every instance, so frankfurter is asked about a pair at most once per 12 hours however many instances
+// run (threat model C19). The rate is kept as the decimal text parseRate accepted, never as a float.
+export const fxCache = pgTable("fx_cache", {
+  pair: char("pair", { length: 7 }).primaryKey(),
+  rate: text("rate").notNull(),
+  rateDate: date("rate_date", { mode: "string" }).notNull(),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+});
+
+// One fixed-window counter per bucket, client network and window. A row in Postgres rather than memory, so the limit
+// holds across every serverless instance (threat model C26).
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    bucket: text("bucket").notNull(),
+    key: text("key").notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).notNull(),
+    count: integer("count").notNull(),
+  },
+  (t) => [primaryKey({ name: "rate_limits_pk", columns: [t.bucket, t.key, t.windowStart] })],
 );
 
 export type GroupRow = typeof groups.$inferSelect;
