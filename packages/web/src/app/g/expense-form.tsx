@@ -24,6 +24,7 @@ import {
 } from "@/components/split-editor";
 import type { ExpenseView, GroupView, MemberView, SplitRequest } from "@/lib/api-types";
 import { addExpense, editExpense } from "@/lib/client/api";
+import { lookUpRate } from "@/lib/client/fx";
 import { DESCRIPTION_MAX, FALLBACK_MESSAGE, cleanText, isTooLong, messageFor, type MessageContext } from "@/lib/client/messages";
 
 const CURRENCY_CODES = listCurrencies().map((cur) => cur.code);
@@ -31,6 +32,13 @@ const ZERO = BigInt(0);
 const NO_MEMBER_ERRORS: ReadonlyMap<string, string> = new Map();
 
 type Field = "description" | "amount" | "currency" | "rate" | "split" | "form";
+
+/** Where the rate field's suggestion stands: none asked for yet, being looked up, found, or not available. */
+type RateSource =
+  | { readonly state: "idle" }
+  | { readonly state: "loading" }
+  | { readonly state: "found"; readonly date: string }
+  | { readonly state: "none" };
 
 type FieldErrors = { readonly [field in Field]?: string } & { readonly members?: ReadonlyMap<string, string> };
 
@@ -147,10 +155,17 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
   );
   // A second press can land before React re-renders the disabled button, so the guard lives outside render.
   const inFlight = useRef(false);
+  const [rateSource, setRateSource] = useState<RateSource>({ state: "idle" });
+  // Read inside the lookup's answer, which can arrive after any number of renders, so these live outside render.
+  const rateTyped = useRef(false);
+  const rateLookup = useRef<AbortController | null>(null);
+  const suggestedRate = useRef<string | null>(null);
 
   useEffect(() => {
     if (focusRequest !== null) document.getElementById(focusRequest.id)?.focus();
   }, [focusRequest]);
+
+  useEffect(() => () => rateLookup.current?.abort(), []);
 
   const base = currency(group.baseCurrency);
   const cur = currency(currencyCode);
@@ -185,6 +200,33 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
       default:
         return submitId;
     }
+  };
+
+  // Asked once per currency change. An answer for a currency that has since been changed again is dropped, and a
+  // rate the person typed is never replaced.
+  const lookUpReferenceRate = (code: string) => {
+    rateLookup.current?.abort();
+    rateLookup.current = null;
+    rateTyped.current = false;
+    suggestedRate.current = null;
+    if (code === base.code) {
+      setRateSource({ state: "idle" });
+      return;
+    }
+    const controller = new AbortController();
+    rateLookup.current = controller;
+    setRateSource({ state: "loading" });
+    void lookUpRate(code, base.code, controller.signal).then((found) => {
+      if (controller.signal.aborted) return;
+      rateLookup.current = null;
+      if (!found.ok) {
+        setRateSource({ state: "none" });
+        return;
+      }
+      suggestedRate.current = found.rate;
+      setRateSource({ state: "found", date: found.date });
+      if (!rateTyped.current) setRate((current) => (current === "" ? found.rate : current));
+    });
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -236,7 +278,9 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
     if (result.ok) {
       setDescription("");
       setAmount("");
-      setRate("");
+      // The currency stays as it was, so the next expense starts from the same suggested rate.
+      rateTyped.current = false;
+      setRate(suggestedRate.current ?? "");
       setDraft((current) => withoutExactAmounts(current));
       setClientId(crypto.randomUUID());
       onSaved(result.data.group);
@@ -297,6 +341,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
             setCurrencyCode(event.target.value);
             // A rate belongs to one pair of currencies, so it never carries over to another.
             setRate("");
+            lookUpReferenceRate(event.target.value);
           }}
           aria-invalid={errors.currency === undefined ? undefined : true}
           aria-describedby={describedBy(currencyId, errors.currency)}
@@ -320,12 +365,26 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
             inputMode="decimal"
             autoComplete="off"
             value={rate}
-            onChange={(event) => setRate(event.target.value)}
+            placeholder={rateSource.state === "loading" ? "Looking up the rate..." : undefined}
+            onChange={(event) => {
+              rateTyped.current = true;
+              setRate(event.target.value);
+            }}
             aria-invalid={errors.rate === undefined ? undefined : true}
             aria-describedby={errors.rate === undefined ? rateHelpId : `${rateHelpId} ${rateId}-error`}
             data-testid="expense-rate"
           />
-          <p id={rateHelpId}>Enter the rate you used.</p>
+          {rateSource.state === "found" && (
+            <p id={rateHelpId} data-testid="rate-source">{`ECB reference rate, ${rateSource.date}`}</p>
+          )}
+          {rateSource.state === "none" && (
+            <p id={rateHelpId} data-testid="rate-source">
+              No reference rate available. Enter the rate you used.
+            </p>
+          )}
+          {(rateSource.state === "idle" || rateSource.state === "loading") && (
+            <p id={rateHelpId}>Enter the rate you used.</p>
+          )}
           <FieldError id={`${rateId}-error`} message={errors.rate} />
         </div>
       )}
