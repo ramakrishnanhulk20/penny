@@ -1,0 +1,295 @@
+name: self-fix
+# A status run's own head_sha is the default branch's head, not the tested commit, so the
+# run is named after the tested commit. gate.mjs counts each pull request's attempts by it.
+run-name: self-fix ${{ github.event.sha }}
+
+# TestSprite reports on a pull request as a commit status. GitHub runs status workflows
+# from the default branch only, so a pull request cannot change what this file does.
+on:
+  status:
+
+permissions: {}
+
+# One run per tested commit at a time. Statuses that are not a TestSprite failure get a
+# group of their own, so they can never cancel or hold up a real run waiting in the queue.
+concurrency:
+  group: ${{ github.event.context == 'TestSprite V3' && github.event.state == 'failure' && format('self-fix-{0}', github.event.sha) || format('self-fix-ignored-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gate:
+    # Vercel's statuses and TestSprite's pending and success statuses also start this
+    # workflow. Skipping them here ends those runs as "skipped", so the attempt count never
+    # has to read their jobs. gate.mjs repeats every one of these checks.
+    if: github.event.context == 'TestSprite V3' && github.event.state == 'failure' && github.event.sender.id == 258111874
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
+      pr: ${{ steps.decide.outputs.pr }}
+      branch: ${{ steps.decide.outputs.branch }}
+      sha: ${{ steps.decide.outputs.sha }}
+      attempt: ${{ steps.decide.outputs.attempt }}
+      preview_origin: ${{ steps.decide.outputs.preview_origin }}
+      head_committed_at: ${{ steps.decide.outputs.head_committed_at }}
+      status_created_at: ${{ steps.decide.outputs.status_created_at }}
+    steps:
+      # A status event's ref is the default branch, so this is the trusted copy of the scripts.
+      - name: Check out the self-fix scripts from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: /scripts/self-fix/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Decide whether to act
+        id: decide
+        env:
+          EVENT_CONTEXT: ${{ github.event.context }}
+          EVENT_STATE: ${{ github.event.state }}
+          EVENT_SENDER_ID: ${{ github.event.sender.id }}
+          EVENT_SHA: ${{ github.event.sha }}
+          EVENT_CREATED_AT: ${{ github.event.created_at }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/self-fix/gate.mjs
+
+  failures:
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      found: ${{ steps.fetch.outputs.found }}
+    steps:
+      - name: Check out the self-fix scripts from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/self-fix/
+            /tools/self-fix/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      # The lockfile pins every package by version and integrity hash, transitive ones included.
+      - name: Install the TestSprite CLI from the lockfile without running install scripts
+        run: |
+          npm ci --ignore-scripts --prefix tools/self-fix
+          echo "$GITHUB_WORKSPACE/tools/self-fix/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Download the failure bundles for this preview
+        id: fetch
+        env:
+          TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
+          TESTSPRITE_NO_TELEMETRY: "1"
+          TESTSPRITE_NO_UPDATE_NOTIFIER: "1"
+          PREVIEW_ORIGIN: ${{ needs.gate.outputs.preview_origin }}
+          HEAD_COMMITTED_AT: ${{ needs.gate.outputs.head_committed_at }}
+          STATUS_CREATED_AT: ${{ needs.gate.outputs.status_created_at }}
+        run: node scripts/self-fix/fetch-failures.mjs
+      - name: Hand the bundles to the fix job
+        if: steps.fetch.outputs.found == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: failure-bundles
+          path: failures/
+          retention-days: 1
+          if-no-files-found: error
+
+  fix:
+    needs: [gate, failures]
+    if: needs.failures.outputs.found == 'true'
+    # One agent per pull request at a time, even when two of its commits fail close together.
+    concurrency:
+      group: self-fix-pr-${{ needs.gate.outputs.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+      rule: ${{ steps.check.outputs.rule }}
+    env:
+      # Outside the home folder on purpose: the agent's settings deny every read under ~,
+      # and the runner's workspace lives under ~.
+      WORK_DIR: /tmp/penny-self-fix
+    steps:
+      - name: Check out the self-fix scripts from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /scripts/self-fix/
+            /tools/self-fix/
+          sparse-checkout-cone-mode: false
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          path: pr
+          persist-credentials: false
+      - name: Move the working copy out of the home folder and strip agent instruction files
+        run: |
+          mv pr "$WORK_DIR"
+          cd "$WORK_DIR"
+          find . -path ./.git -prune -o \( -iname CLAUDE.md -o -iname CLAUDE.local.md -o -iname AGENTS.md -o -iname .mcp.json -o -iname .claude \) -print0 \
+            | xargs -0 -r rm -rf --
+          # The agent can write anywhere in its folder, and git runs commands named in its own
+          # config (core.fsmonitor, textconv), so the git folder waits outside until the agent is done.
+          mv .git "$RUNNER_TEMP/pr.git"
+      - name: Download the failure bundles
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: failure-bundles
+          path: ${{ env.WORK_DIR }}/.self-fix/failure
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Install Claude Code from the lockfile without running install scripts
+        run: |
+          npm ci --ignore-scripts --prefix tools/self-fix
+          # With install scripts off the package's bin is a stub that exits 1; the package's
+          # own wrapper starts the native binary instead. The path is fixed under the default
+          # branch's checkout, so nothing in the pull request's checkout can move it.
+          echo "CLAUDE_CLI=$GITHUB_WORKSPACE/tools/self-fix/node_modules/@anthropic-ai/claude-code/cli-wrapper.cjs" >> "$GITHUB_ENV"
+      - name: Install the agent settings from the default branch
+        run: |
+          mkdir -p "$HOME/.claude"
+          cp scripts/self-fix/claude-settings.json "$HOME/.claude/settings.json"
+      - name: Run Claude Code on the failures
+        working-directory: ${{ env.WORK_DIR }}
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+          PROMPT_FILE: ${{ github.workspace }}/scripts/self-fix/prompt.md
+        run: |
+          prompt="$(cat "$PROMPT_FILE")"
+          status=0
+          # The transcript and stderr go to files that are never printed: the job log is public.
+          node "$CLAUDE_CLI" -p "$prompt" \
+            --setting-sources user \
+            --safe-mode \
+            --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+            --permission-mode dontAsk \
+            --permission-prompts none \
+            --tools "Read,Edit,Write,Glob,Grep" \
+            --allowedTools "Read,Edit,Write,Glob,Grep" \
+            --disallowedTools Bash WebFetch WebSearch Agent "mcp__*" \
+            --max-turns 30 \
+            --max-budget-usd 2 \
+            --output-format json \
+            > "$RUNNER_TEMP/claude-result.json" 2> "$RUNNER_TEMP/claude-stderr.log" || status=$?
+          echo "claude exit code: $status"
+          jq -c '{is_error, num_turns, total_cost_usd}' "$RUNNER_TEMP/claude-result.json" 2> /dev/null \
+            || echo "the result was not readable JSON"
+          [ "$status" -eq 0 ] && [ "$(jq -r '.is_error' "$RUNNER_TEMP/claude-result.json" 2> /dev/null)" = "false" ]
+      - name: Turn the agent's edits into a patch
+        working-directory: ${{ env.WORK_DIR }}
+        run: |
+          export GIT_DIR="$RUNNER_TEMP/pr.git" GIT_WORK_TREE="$WORK_DIR"
+          # Intent-to-add makes files the agent created show up in git diff as new files.
+          git add --intent-to-add -- . ':(exclude).self-fix'
+          git diff --no-color --no-ext-diff -- . ':(exclude).self-fix' > "$RUNNER_TEMP/fix.patch"
+          echo "patch size: $(wc -l < "$RUNNER_TEMP/fix.patch") lines"
+      # Checked here, before the patch can leave this job, so a refused patch is never uploaded.
+      - name: Check the patch
+        id: check
+        run: node scripts/self-fix/check-diff.mjs "$RUNNER_TEMP/fix.patch"
+      - name: Hand the checked patch to the push job
+        if: steps.check.outputs.ok == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fix-patch
+          path: ${{ runner.temp }}/fix.patch
+          retention-days: 1
+          if-no-files-found: error
+
+  push:
+    needs: [gate, fix]
+    if: needs.fix.outputs.ok == 'true' || needs.fix.outputs.ok == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out the checker from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: /scripts/self-fix/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Check out the tested commit to push onto
+        if: needs.fix.outputs.ok == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          path: pr
+      - name: Download the checked patch
+        if: needs.fix.outputs.ok == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fix-patch
+          path: ${{ runner.temp }}/patch
+      # The fix job ran an agent, so its verdict is checked again here before anything is pushed.
+      - name: Check the patch again
+        id: check
+        if: needs.fix.outputs.ok == 'true'
+        env:
+          COMMENT_FILE: ${{ runner.temp }}/self-fix-comment.md
+        run: node scripts/self-fix/check-diff.mjs "$RUNNER_TEMP/patch/fix.patch"
+      - name: Write the refusal from the fix job's check
+        id: refused
+        if: needs.fix.outputs.ok == 'false'
+        env:
+          COMMENT_FILE: ${{ runner.temp }}/self-fix-comment.md
+          RULE: ${{ needs.fix.outputs.rule }}
+        run: node scripts/self-fix/check-diff.mjs --refused "$RULE"
+      - name: Apply, commit and push as a fast-forward onto the tested commit
+        if: steps.check.outputs.ok == 'true'
+        working-directory: pr
+        env:
+          BRANCH: ${{ needs.gate.outputs.branch }}
+          SHA: ${{ needs.gate.outputs.sha }}
+          ATTEMPT: ${{ needs.gate.outputs.attempt }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "unexpected commit id"; exit 1; }
+          [[ "$ATTEMPT" =~ ^[12]$ ]] || { echo "unexpected attempt number"; exit 1; }
+          [[ "$BRANCH" =~ ^[A-Za-z0-9]+([/-][A-Za-z0-9]+)*$ ]] || { echo "unexpected branch name"; exit 1; }
+          [ "$(git rev-parse HEAD)" = "$SHA" ] || { echo "the checkout is not the tested commit"; exit 1; }
+          git apply --check --index "$RUNNER_TEMP/patch/fix.patch"
+          git apply --index "$RUNNER_TEMP/patch/fix.patch"
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit --quiet -m "self-fix: attempt ${ATTEMPT} for the TestSprite failure on ${SHA:0:7}"
+          remote_head="$(git ls-remote origin "refs/heads/${BRANCH}" | cut -f1)"
+          [ "$remote_head" = "$SHA" ] || { echo "the branch has moved since TestSprite tested it"; exit 1; }
+          # A plain push is refused unless it is a fast-forward, so a moved branch fails here too.
+          git push origin "HEAD:refs/heads/${BRANCH}"
+      - name: Post the result on the pull request
+        if: steps.check.outputs.ok == 'true' || steps.check.outputs.ok == 'false' || steps.refused.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.gate.outputs.pr }}
+        run: |
+          [[ "$PR" =~ ^[0-9]+$ ]] || { echo "unexpected pull request number"; exit 1; }
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/self-fix-comment.md"

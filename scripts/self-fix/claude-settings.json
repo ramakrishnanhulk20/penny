@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "blockReadsOutsideWorkingDirectories": true,
+    "deny": [
+      "Read(//proc/**)",
+      "Read(~/**)",
+      "Edit(./.git/**)",
+      "Edit(./.github/**)",
+      "Edit(./scripts/**)",
+      "Edit(./packages/web/test/**)",
+      "Edit(./packages/core/test/**)",
+      "Edit(./packages/web/drizzle/**)"
+    ]
+  },
+  "claudeMdExcludes": ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/AGENTS.md"],
+  "disableAllHooks": true
+}
