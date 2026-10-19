@@ -1,6 +1,14 @@
 import { MAX_PARTS } from "@penny/core";
 import { z } from "zod";
-import type { AddExpenseRequest, AddPaymentRequest, CreateGroupRequest, EditExpenseRequest } from "./api-types";
+import type {
+  AddExpenseRequest,
+  AddMemberRequest,
+  AddPaymentRequest,
+  ChangeBaseCurrencyRequest,
+  CreateGroupRequest,
+  EditExpenseRequest,
+  ResetLinkRequest,
+} from "./api-types";
 import { cleanName } from "./text";
 
 /** Bodies above this many bytes are refused before any parsing. */
@@ -98,10 +106,23 @@ export const addPaymentBody = z.strictObject({
   rate: z.string().nullable(),
 }) satisfies z.ZodType<unknown, AddPaymentRequest>;
 
+// The same name rule group creation applies to each member.
+export const addMemberBody = z.strictObject({
+  name: cleanText(MEMBER_NAME_MAX, "bad_member_name"),
+}) satisfies z.ZodType<unknown, AddMemberRequest>;
+
+export const changeBaseCurrencyBody = z.strictObject({
+  baseCurrency: z.string(),
+}) satisfies z.ZodType<unknown, ChangeBaseCurrencyRequest>;
+
+export const resetLinkBody = z.strictObject({}) satisfies z.ZodType<unknown, ResetLinkRequest>;
+
 export type CreateGroupBody = z.output<typeof createGroupBody>;
 export type AddExpenseBody = z.output<typeof addExpenseBody>;
 export type EditExpenseBody = z.output<typeof editExpenseBody>;
 export type AddPaymentBody = z.output<typeof addPaymentBody>;
+export type AddMemberBody = z.output<typeof addMemberBody>;
+export type ChangeBaseCurrencyBody = z.output<typeof changeBaseCurrencyBody>;
 
 export type ParsedBody<T> = { ok: true; value: T } | { ok: false; code: string };
 

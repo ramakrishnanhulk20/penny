@@ -1,5 +1,5 @@
-// Not covered: member removal (not built yet), writers racing each other, or the database role that should forbid
-// changing events (a deploy setting, not code).
+// Not covered: writers racing each other, link resets (they move no money; api-reset-link.test.ts has them), or the
+// database role that should forbid changing events (a deploy setting, not code).
 import {
   balances,
   currency,
@@ -16,6 +16,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { type Db, setDbForTests } from "@/db/client";
 import { events } from "@/db/schema";
 import { createTestDb } from "@/db/testing";
+import { MIN_MEMBERS } from "@/lib/api-schemas";
 import type {
   AddExpenseRequest,
   AddExpenseResponse,
@@ -26,13 +27,27 @@ import type {
   SplitRequest,
 } from "@/lib/api-types";
 import type {
+  BaseCurrencyChangedPayload,
   ExpenseAddedPayload,
   ExpenseDeletedPayload,
   ExpenseEditedPayload,
+  MemberAddedPayload,
+  MemberRemovedPayload,
   PaymentAddedPayload,
   PaymentDeletedPayload,
 } from "@/lib/ledger-store";
-import { deleteExpense, deletePayment, patchExpense, postExpense, postPayment, readGroup, startGroup } from "./fixtures";
+import {
+  deleteExpense,
+  deleteMember,
+  deletePayment,
+  patchExpense,
+  patchGroup,
+  postExpense,
+  postMember,
+  postPayment,
+  readGroup,
+  startGroup,
+} from "./fixtures";
 
 vi.mock("next/server", () => ({ connection: async () => undefined }));
 
@@ -86,36 +101,73 @@ type Rebuilt = {
   /** Each live expense's id and the version the log says it is at. */
   expenses: [string, number][];
   payments: string[];
+  /** Current members in position order. */
+  members: string[];
+  /** True once the log holds any expense or payment. */
+  locked: boolean;
+  /** Everyone an expense as it stands now (deleted or not) or a payment (undone or not) names. */
+  involved: ReadonlySet<string>;
 };
+
+function namedIn(entry: Entry): string[] {
+  if (entry.kind === "payment") return [entry.from, entry.to];
+  const split = entry.split.mode === "equal" ? entry.split.members : entry.split.parts.map((part) => part.memberId);
+  return [entry.paidBy, ...split];
+}
 
 // Reads the events table and nothing else, so it checks the current-state tables instead of repeating them.
 async function replay(groupId: string): Promise<Rebuilt> {
   const log = await db.select().from(events).where(eq(events.groupId, groupId)).orderBy(asc(events.seq));
   let base: Currency | null = null;
   const people: { id: string; position: number }[] = [];
+  const removed = new Set<string>();
   const liveExpenses = new Map<string, { entry: Entry; version: number }>();
   const livePayments = new Map<string, Entry>();
+  // Deleted expenses and undone payments stay here: they still name people, and still lock the base.
+  const everyEntry = new Map<string, Entry>();
+  const record = (id: string, entry: Entry) => {
+    for (const memberId of namedIn(entry)) {
+      if (removed.has(memberId)) throw new Error(`an entry names removed member ${memberId}`);
+    }
+    everyEntry.set(id, entry);
+  };
   for (const event of log) {
     if (event.kind === "group_created") {
       base = known((event.payload as { baseCurrency: string }).baseCurrency);
     } else if (event.kind === "member_added") {
-      const { memberId, position } = event.payload as { memberId: string; position: number };
+      const { memberId, position } = event.payload as MemberAddedPayload;
       people.push({ id: memberId, position });
+    } else if (event.kind === "member_removed") {
+      const { memberId } = event.payload as MemberRemovedPayload;
+      if (!people.some((person) => person.id === memberId) || removed.has(memberId)) {
+        throw new Error(`member_removed for a member who is not current: ${memberId}`);
+      }
+      if ([...everyEntry.values()].some((entry) => namedIn(entry).includes(memberId))) {
+        throw new Error(`member_removed for a member an entry names: ${memberId}`);
+      }
+      removed.add(memberId);
+    } else if (event.kind === "base_currency_changed") {
+      const { from, to } = event.payload as BaseCurrencyChangedPayload;
+      if (everyEntry.size > 0) throw new Error("base_currency_changed after money was recorded");
+      if (base === null || base.code !== from) throw new Error(`base_currency_changed from ${from}, not the base`);
+      base = known(to);
     } else if (event.kind === "expense_added") {
       const payload = event.payload as ExpenseAddedPayload;
       liveExpenses.set(payload.expenseId, { entry: expenseFrom(payload), version: 1 });
+      record(payload.expenseId, expenseFrom(payload));
     } else if (event.kind === "expense_edited") {
       const payload = event.payload as ExpenseEditedPayload;
       const prior = liveExpenses.get(payload.expenseId);
       if (prior === undefined) throw new Error(`expense_edited for an expense that is not live: ${payload.expenseId}`);
       if (payload.version !== prior.version + 1) throw new Error(`expense_edited skipped a version: ${payload.expenseId}`);
       liveExpenses.set(payload.expenseId, { entry: expenseFrom(payload), version: payload.version });
+      record(payload.expenseId, expenseFrom(payload));
     } else if (event.kind === "expense_deleted") {
       const { expenseId } = event.payload as ExpenseDeletedPayload;
       if (!liveExpenses.delete(expenseId)) throw new Error(`expense_deleted for an expense that is not live: ${expenseId}`);
     } else if (event.kind === "payment_added") {
       const payload = event.payload as PaymentAddedPayload;
-      livePayments.set(payload.paymentId, {
+      const entry: Entry = {
         kind: "payment",
         id: payload.paymentId,
         from: payload.from,
@@ -123,7 +175,9 @@ async function replay(groupId: string): Promise<Rebuilt> {
         currency: known(payload.currency),
         amount: BigInt(payload.amountMinor),
         rate: rateFrom(payload.rateUnits, payload.rateScale),
-      });
+      };
+      livePayments.set(payload.paymentId, entry);
+      record(payload.paymentId, entry);
     } else if (event.kind === "payment_deleted") {
       const { paymentId } = event.payload as PaymentDeletedPayload;
       if (!livePayments.delete(paymentId)) throw new Error(`payment_deleted for a payment that is not live: ${paymentId}`);
@@ -132,6 +186,7 @@ async function replay(groupId: string): Promise<Rebuilt> {
     }
   }
   if (base === null) throw new Error("no group_created event");
+  // Removed members stay in the sums, exactly as the view keeps them.
   const order = people.sort((a, b) => a.position - b.position).map((person) => person.id);
   const spent = [...liveExpenses.values()].map((item) => item.entry);
   const totals = balances(base, order, [...spent, ...livePayments.values()]);
@@ -141,11 +196,18 @@ async function replay(groupId: string): Promise<Rebuilt> {
     totals: totals.value,
     expenses: [...liveExpenses].map(([id, item]) => [id, item.version]),
     payments: [...livePayments.keys()],
+    members: order.filter((id) => !removed.has(id)),
+    locked: everyEntry.size > 0,
+    involved: new Set([...everyEntry.values()].flatMap(namedIn)),
   };
 }
 
 const step = fc.record({
-  action: fc.constantFrom("expense", "payment", "undo", "edit", "delete"),
+  // The money actions keep most of the weight, so the floors on them stay meaningful with member and base changes mixed in.
+  action: fc.oneof(
+    { arbitrary: fc.constantFrom("expense", "payment", "undo", "edit", "delete"), weight: 5 },
+    { arbitrary: fc.constantFrom("add_member", "remove_member", "base"), weight: 2 },
+  ),
   // One edit or delete in four names a version the expense was never at, which the API must refuse.
   stale: fc.nat({ max: 3 }).map((n) => n === 0),
   // One step in four repeats the one before, so most steps are new and an undo usually has a payment to find.
@@ -220,11 +282,18 @@ type Sent =
   | { kind: "payment"; body: AddPaymentRequest }
   | { kind: "undo"; paymentId: string; status: 200 | 404 }
   | { kind: "edit"; expenseId: string; body: EditExpenseRequest; statuses: readonly number[] }
-  | { kind: "delete"; expenseId: string; version: number; statuses: readonly number[] };
+  | { kind: "delete"; expenseId: string; version: number; statuses: readonly number[] }
+  | { kind: "add_member"; name: string }
+  | { kind: "remove_member"; memberId: string }
+  | { kind: "base"; baseCurrency: string };
 
-function sentFor(group: GroupView, s: Step, made: readonly string[], bills: readonly Bill[]): Sent {
+function sentFor(group: GroupView, s: Step, made: readonly string[], bills: readonly Bill[], extras: number): Sent {
   if (s.action === "expense") return { kind: "expense", body: requestFor(group, s) };
   if (s.action === "payment") return { kind: "payment", body: paymentFor(group, s) };
+  // A retry repeats the same name, which the unique index must refuse.
+  if (s.action === "add_member") return { kind: "add_member", name: `Extra ${extras + 1}` };
+  if (s.action === "remove_member") return { kind: "remove_member", memberId: group.members[s.pick % group.members.length].id };
+  if (s.action === "base") return { kind: "base", baseCurrency: s.currency };
   if (s.action === "undo") {
     // An undo picks any payment made so far, live or already undone; with none made yet it names an id nobody has.
     if (made.length === 0) return { kind: "undo", paymentId: crypto.randomUUID(), status: 404 };
@@ -246,7 +315,7 @@ function sentFor(group: GroupView, s: Step, made: readonly string[], bills: read
   return { kind: "delete", expenseId: bill.id, version, statuses: bill.deleted ? [200] : s.stale ? [409] : [200] };
 }
 
-const RUNS = 40;
+const RUNS = 80;
 // Picked once and never tuned to its results. The coverage test counts what this seed's sequences did, so its guards
 // either always pass or always fail: they cannot fail by chance.
 const COVERAGE_SEED = 20_261_019;
@@ -258,6 +327,12 @@ type Coverage = {
   retriedEdits: number;
   /** Edits and deletes refused with 409 stale_version. */
   refusedStale: number;
+  /** Members added after the group was created. */
+  addedMembers: number;
+  /** Removals refused with 409 member_in_use. */
+  refusedRemovals: number;
+  /** Base changes refused with 409 base_locked. */
+  refusedBase: number;
   /** The events this run's groups wrote, by kind. */
   logged: ReadonlyMap<string, number>;
 };
@@ -268,6 +343,9 @@ async function exercise(seed?: number): Promise<Coverage> {
   let stored = 0;
   let retriedEdits = 0;
   let refusedStale = 0;
+  let addedMembers = 0;
+  let refusedRemovals = 0;
+  let refusedBase = 0;
   const groupIds: string[] = [];
 
   await fc.assert(
@@ -276,14 +354,37 @@ async function exercise(seed?: number): Promise<Coverage> {
       fc.integer({ min: 2, max: NAMES.length }),
       fc.array(step, { minLength: 1, maxLength: 12 }),
       async (base, size, steps) => {
-        const { token, group } = await startGroup({ baseCurrency: base, members: NAMES.slice(0, size) });
-        groupIds.push(group.id);
+        const started = await startGroup({ baseCurrency: base, members: NAMES.slice(0, size) });
+        const { token } = started;
+        groupIds.push(started.group.id);
+        // The group as the last member or base change left it, so later requests name only current members and
+        // rate only against the current base.
+        let group = started.group;
+        let extras = 0;
         const made: string[] = [];
         const bills: Bill[] = [];
         let previous: Sent | null = null;
         for (const s of steps) {
-          const sent: Sent = s.retry && previous !== null ? previous : sentFor(group, s, made, bills);
-          if (sent.kind === "expense") {
+          const sent: Sent = s.retry && previous !== null ? previous : sentFor(group, s, made, bills, extras);
+          if (sent.kind === "add_member") {
+            const response = await postMember(token, { name: sent.name });
+            expect([201, 400]).toContain(response.status);
+            if (response.status === 201) {
+              extras += 1;
+              addedMembers += 1;
+              group = ((await response.json()) as { group: GroupView }).group;
+            }
+          } else if (sent.kind === "remove_member") {
+            const response = await deleteMember(token, sent.memberId);
+            expect([200, 409]).toContain(response.status);
+            if (response.status === 200) group = ((await response.json()) as { group: GroupView }).group;
+            else if ((await response.json()).error.code === "member_in_use") refusedRemovals += 1;
+          } else if (sent.kind === "base") {
+            const response = await patchGroup(token, { baseCurrency: sent.baseCurrency });
+            expect([200, 409]).toContain(response.status);
+            if (response.status === 200) group = ((await response.json()) as { group: GroupView }).group;
+            else refusedBase += 1;
+          } else if (sent.kind === "expense") {
             const response = await postExpense(token, sent.body);
             expect([200, 201, 400]).toContain(response.status);
             if (response.status === 201) {
@@ -322,6 +423,17 @@ async function exercise(seed?: number): Promise<Coverage> {
         const view = await readGroup(token);
         const rebuilt = await replay(view.id);
 
+        expect(view.members.map((member) => member.id)).toEqual(rebuilt.members);
+        expect(view.baseCurrency).toBe(rebuilt.base.code);
+        expect(view.baseLocked).toBe(rebuilt.locked);
+        expect(view.members.map((member) => member.removable)).toEqual(
+          rebuilt.members.map(
+            (id) =>
+              !rebuilt.involved.has(id) &&
+              (rebuilt.totals.get(id) ?? BigInt(0)) === BigInt(0) &&
+              rebuilt.members.length > MIN_MEMBERS,
+          ),
+        );
         expect(view.balances).toEqual(
           view.members.map((member) => ({
             memberId: member.id,
@@ -345,10 +457,18 @@ async function exercise(seed?: number): Promise<Coverage> {
     .from(events)
     .where(inArray(events.groupId, groupIds))
     .groupBy(events.kind);
-  return { stored, retriedEdits, refusedStale, logged: new Map(kinds.map((row) => [row.kind, row.n])) };
+  return {
+    stored,
+    retriedEdits,
+    refusedStale,
+    addedMembers,
+    refusedRemovals,
+    refusedBase,
+    logged: new Map(kinds.map((row) => [row.kind, row.n])),
+  };
 }
 
-it("rebuilds the balances GroupView shows from the events table alone, after any sequence of adds, edits, deletes, payments and undos", async () => {
+it("rebuilds the balances, members and base GroupView shows from the events table alone, after any sequence of adds, edits, deletes, payments, undos, member changes and base changes", async () => {
   await exercise();
 }, 180_000);
 
@@ -358,14 +478,20 @@ it("rebuilds the balances GroupView shows from the events table alone, after any
 it("reaches every kind of change on a fixed seed, so the property cannot pass by testing nothing", async () => {
   const coverage = await exercise(COVERAGE_SEED);
 
-  // On this seed the run stores 70 expenses and payments and logs 34 payments, 10 undos, 6 edits and 6 deletes, with
-  // 4 retried edits and 7 stale refusals. Each floor sits near half of that, so it catches a run that went hollow
-  // without breaking on a harmless change in which requests get refused.
-  expect(coverage.stored).toBeGreaterThanOrEqual(35);
-  expect(coverage.logged.get("payment_added") ?? 0).toBeGreaterThanOrEqual(17);
-  expect(coverage.logged.get("payment_deleted") ?? 0).toBeGreaterThanOrEqual(5);
-  expect(coverage.logged.get("expense_edited") ?? 0).toBeGreaterThanOrEqual(3);
-  expect(coverage.logged.get("expense_deleted") ?? 0).toBeGreaterThanOrEqual(3);
+  // On this seed the run stores 79 expenses and payments and logs 25 payments, 6 undos, 5 edits and 13 deletes, with
+  // 4 retried edits and 7 stale refusals; it adds 29 members, removes 13 and changes 14 bases, and refuses 3
+  // removals of members in use and 9 base changes once money was in. Each floor sits near half of that, so it catches
+  // a run that went hollow without breaking on a harmless change in which requests get refused.
+  expect(coverage.stored).toBeGreaterThanOrEqual(40);
+  expect(coverage.logged.get("payment_added") ?? 0).toBeGreaterThanOrEqual(12);
+  expect(coverage.logged.get("payment_deleted") ?? 0).toBeGreaterThanOrEqual(3);
+  expect(coverage.logged.get("expense_edited") ?? 0).toBeGreaterThanOrEqual(2);
+  expect(coverage.logged.get("expense_deleted") ?? 0).toBeGreaterThanOrEqual(6);
   expect(coverage.retriedEdits).toBeGreaterThanOrEqual(2);
   expect(coverage.refusedStale).toBeGreaterThanOrEqual(3);
+  expect(coverage.addedMembers).toBeGreaterThanOrEqual(14);
+  expect(coverage.logged.get("member_removed") ?? 0).toBeGreaterThanOrEqual(6);
+  expect(coverage.logged.get("base_currency_changed") ?? 0).toBeGreaterThanOrEqual(7);
+  expect(coverage.refusedRemovals).toBeGreaterThanOrEqual(2);
+  expect(coverage.refusedBase).toBeGreaterThanOrEqual(4);
 }, 180_000);

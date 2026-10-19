@@ -3,7 +3,15 @@
 
 export type SplitMode = "equal" | "shares" | "exact";
 
-export type MemberView = { id: string; name: string };
+export type MemberView = {
+  id: string;
+  name: string;
+  /**
+   * True only when removing this member is allowed: a balance of exactly zero, named in no expense or payment
+   * (deleted ones included), and the group keeps at least two members afterwards.
+   */
+  removable: boolean;
+};
 
 export type ExpensePartView = {
   memberId: string;
@@ -45,6 +53,8 @@ export type GroupView = {
   name: string;
   baseCurrency: string;
   baseDigits: number;
+  /** True once the group has had any expense or payment, deleted ones included. The base currency is then fixed. */
+  baseLocked: boolean;
   version: number;
   members: MemberView[];
   balances: { memberId: string; amount: string }[];
@@ -96,5 +106,17 @@ export type AddPaymentRequest = {
 };
 export type AddPaymentResponse = { payment: PaymentView; group: GroupView };
 export type UndoPaymentResponse = { group: GroupView };
+
+export type AddMemberRequest = { name: string };
+export type AddMemberResponse = { member: MemberView; group: GroupView };
+export type RemoveMemberResponse = { group: GroupView };
+
+export type ChangeBaseCurrencyRequest = { baseCurrency: string };
+export type ChangeBaseCurrencyResponse = { group: GroupView };
+
+/** Always the empty object: the header names the group and the server makes the new token. */
+export type ResetLinkRequest = Record<string, never>;
+/** The new link token, sent in this response and nowhere else. */
+export type ResetLinkResponse = { token: string; group: GroupView };
 
 export type ApiError = { error: { code: string } };
