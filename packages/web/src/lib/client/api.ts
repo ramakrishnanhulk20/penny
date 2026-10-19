@@ -1,13 +1,20 @@
 import type {
   AddExpenseRequest,
   AddExpenseResponse,
+  AddMemberRequest,
+  AddMemberResponse,
   AddPaymentRequest,
   AddPaymentResponse,
+  ChangeBaseCurrencyRequest,
+  ChangeBaseCurrencyResponse,
   CreateGroupRequest,
   CreateGroupResponse,
   DeleteExpenseResponse,
   EditExpenseRequest,
   GroupView,
+  RemoveMemberResponse,
+  ResetLinkRequest,
+  ResetLinkResponse,
   UndoPaymentResponse,
 } from "@/lib/api-types";
 
@@ -111,5 +118,51 @@ export function undoPayment(token: string, paymentId: string): Promise<ApiResult
   return send<UndoPaymentResponse>(`/api/group/payments/${encodeURIComponent(paymentId)}`, {
     method: "DELETE",
     headers: { [GROUP_HEADER]: token },
+  });
+}
+
+/** POST /api/group/members. "duplicate_member_name" when a current member has the same name, letter case ignored. */
+export function addMember(token: string, request: AddMemberRequest): Promise<ApiResult<AddMemberResponse>> {
+  return send<AddMemberResponse>("/api/group/members", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
+    body: JSON.stringify(request),
+  });
+}
+
+/**
+ * DELETE /api/group/members/{id}. "member_in_use" for anyone named in an expense or payment; removing a member again
+ * succeeds and changes nothing.
+ */
+export function removeMember(token: string, memberId: string): Promise<ApiResult<RemoveMemberResponse>> {
+  // The id came from a server response, but it is still encoded so no value can change which path is called.
+  return send<RemoveMemberResponse>(`/api/group/members/${encodeURIComponent(memberId)}`, {
+    method: "DELETE",
+    headers: { [GROUP_HEADER]: token },
+  });
+}
+
+/** PATCH /api/group. "base_locked" once the group has had any expense or payment. */
+export function changeBaseCurrency(
+  token: string,
+  request: ChangeBaseCurrencyRequest,
+): Promise<ApiResult<ChangeBaseCurrencyResponse>> {
+  return send<ChangeBaseCurrencyResponse>("/api/group", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
+    body: JSON.stringify(request),
+  });
+}
+
+/**
+ * POST /api/group/reset-link. On success the body carries the new link token, which the caller puts only in the
+ * address fragment. The old token answers "not_found" from then on, for everyone.
+ */
+export function resetLink(token: string): Promise<ApiResult<ResetLinkResponse>> {
+  const request: ResetLinkRequest = {};
+  return send<ResetLinkResponse>("/api/group/reset-link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
+    body: JSON.stringify(request),
   });
 }

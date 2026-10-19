@@ -1,17 +1,29 @@
 "use client";
 
+import { listCurrencies } from "@penny/core";
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { FieldError } from "@/components/field-error";
 import type { ExpenseView, GroupView, TransferView } from "@/lib/api-types";
-import { addPayment, deleteExpense, getGroup, undoPayment, type ApiResult } from "@/lib/client/api";
-import { FALLBACK_MESSAGE, messageFor } from "@/lib/client/messages";
+import {
+  addMember,
+  addPayment,
+  changeBaseCurrency,
+  deleteExpense,
+  getGroup,
+  removeMember,
+  resetLink,
+  undoPayment,
+  type ApiResult,
+} from "@/lib/client/api";
+import { FALLBACK_MESSAGE, cleanText, messageFor } from "@/lib/client/messages";
 import { ExpenseForm } from "./expense-form";
 
 // The format lib/group-token.ts checks on the server, repeated here because that module needs node:crypto.
 // A fragment that fails it never leaves the browser.
 const TOKEN_FORMAT = /^[A-Za-z0-9_-]{22}$/;
 const COPIED_FOR_MS = 2000;
+const CURRENCY_CODES = listCurrencies().map((cur) => cur.code);
 
 type Ready = {
   readonly token: string;
@@ -19,6 +31,8 @@ type Ready = {
   readonly group: GroupView;
   readonly link: string;
   readonly created: boolean;
+  /** True once this page made a new link, so it shows that link in place of the created banner. */
+  readonly linkReset: boolean;
   readonly you: string;
 };
 
@@ -142,16 +156,231 @@ function LinkNotFound() {
   );
 }
 
+function ResetLinkButton({
+  token,
+  onLinkReset,
+}: {
+  readonly token: string;
+  readonly onLinkReset: (token: string, group: GroupView) => void;
+}) {
+  const errorId = useId();
+  const [confirming, setConfirming] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  // A second press can land before React re-renders the disabled button, and a second reset would kill the first
+  // new link, so the guard lives outside render.
+  const inFlight = useRef(false);
+
+  async function confirm() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    setError(undefined);
+    const result = await resetLink(token);
+    inFlight.current = false;
+    setPending(false);
+    setConfirming(false);
+    if (result.ok) onLinkReset(result.data.token, result.data.group);
+    else setError(messageFor(result.error));
+  }
+
+  return (
+    <>
+      {confirming ? (
+        <>
+          <span>Make a new link? The old link will stop working for everyone.</span>{" "}
+          <button type="button" disabled={pending} onClick={() => void confirm()} data-testid="reset-link-confirm">
+            Make new link
+          </button>{" "}
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => setConfirming(false)}
+            data-testid="reset-link-cancel"
+          >
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setConfirming(true);
+            setError(undefined);
+          }}
+          data-testid="reset-link"
+        >
+          Reset link
+        </button>
+      )}
+      <FieldError id={errorId} message={error} />
+    </>
+  );
+}
+
+function BaseCurrencyPicker({
+  token,
+  group,
+  onSaved,
+}: {
+  readonly token: string;
+  readonly group: GroupView;
+  readonly onSaved: (group: GroupView) => void;
+}) {
+  const selectId = useId();
+  const errorId = useId();
+  const [choice, setChoice] = useState(group.baseCurrency);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  const inFlight = useRef(false);
+
+  async function change() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(true);
+    setError(undefined);
+    const result = await changeBaseCurrency(token, { baseCurrency: choice });
+    inFlight.current = false;
+    setPending(false);
+    if (result.ok) onSaved(result.data.group);
+    else setError(messageFor(result.error));
+  }
+
+  if (group.baseLocked) return <p data-testid="base-locked">Base currency is fixed once money is recorded.</p>;
+  return (
+    <div className="field">
+      <label htmlFor={selectId}>Base currency</label>
+      <div className="inline">
+        <select
+          id={selectId}
+          value={choice}
+          onChange={(event) => setChoice(event.target.value)}
+          aria-invalid={error === undefined ? undefined : true}
+          aria-describedby={error === undefined ? undefined : errorId}
+          data-testid="base-currency"
+        >
+          {CURRENCY_CODES.map((code) => (
+            <option key={code} value={code}>
+              {code}
+            </option>
+          ))}
+        </select>
+        <button type="button" disabled={pending} onClick={() => void change()} data-testid="base-currency-change">
+          Change
+        </button>
+      </div>
+      <FieldError id={errorId} message={error} />
+    </div>
+  );
+}
+
+function MembersSection({
+  token,
+  group,
+  onSaved,
+  onRemoved,
+}: {
+  readonly token: string;
+  readonly group: GroupView;
+  readonly onSaved: (group: GroupView) => void;
+  readonly onRemoved: (memberId: string) => void;
+}) {
+  const inputId = useId();
+  const errorId = useId();
+  const [name, setName] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  // One member change at a time, so two answers arriving out of order cannot put an older group back on screen.
+  const inFlight = useRef(false);
+
+  async function run(action: () => Promise<ApiResult<{ readonly group: GroupView }>>): Promise<boolean> {
+    if (inFlight.current) return false;
+    inFlight.current = true;
+    setPending(true);
+    setError(undefined);
+    const result = await action();
+    inFlight.current = false;
+    setPending(false);
+    if (!result.ok) {
+      setError(messageFor(result.error));
+      return false;
+    }
+    onSaved(result.data.group);
+    return true;
+  }
+
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const cleaned = cleanText(name);
+    if (cleaned === "") return;
+    // The server judges length and duplicates with the same rules as group creation, so the browser does not guess.
+    if (await run(() => addMember(token, { name: cleaned }))) setName("");
+  }
+
+  async function remove(memberId: string) {
+    if (await run(() => removeMember(token, memberId))) onRemoved(memberId);
+  }
+
+  return (
+    <section>
+      <h2>Members</h2>
+      <ul>
+        {group.members.map((member) => (
+          <li key={member.id} data-testid="member-row">
+            {member.name}
+            {member.removable && (
+              <>
+                {" "}
+                <button
+                  type="button"
+                  disabled={pending}
+                  onClick={() => void remove(member.id)}
+                  data-testid="member-remove"
+                >
+                  Remove
+                </button>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+      <form onSubmit={add}>
+        <div className="field">
+          <label htmlFor={inputId}>New member</label>
+          <input
+            id={inputId}
+            type="text"
+            autoComplete="off"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            aria-invalid={error === undefined ? undefined : true}
+            aria-describedby={error === undefined ? undefined : errorId}
+            data-testid="member-new"
+          />
+          <FieldError id={errorId} message={error} />
+        </div>
+        <div>
+          <button type="submit" disabled={pending || cleanText(name) === ""} data-testid="member-add">
+            Add member
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 type GroupBoardProps = {
   readonly ready: Ready;
   readonly onYouChange: (memberId: string) => void;
   readonly onSaved: (group: GroupView) => void;
+  readonly onLinkReset: (token: string, group: GroupView) => void;
 };
 
-function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
-  const { token, group, link, created, you } = ready;
+function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProps) {
+  const { token, group, link, created, linkReset, you } = ready;
   const youId = useId();
   const linkId = useId();
+  const newLinkId = useId();
   const paymentErrorId = useId();
   const [paymentPending, setPaymentPending] = useState(false);
   const [paymentError, setPaymentError] = useState<string | undefined>(undefined);
@@ -169,6 +398,8 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
   const base = group.baseCurrency;
   const names = new Map(group.members.map((member) => [member.id, member.name]));
   const transfers = group.settlement.transfers;
+  // The form starts its currency on the base, so a new base mounts a new form.
+  const formKey = `${group.id}:${base}:${formRound}`;
 
   // One payment action at a time: every settle-up line belongs to the plan on screen and paying one can change the
   // others, and two answers arriving out of order could put an older group back on screen.
@@ -250,14 +481,26 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
         <h1 data-testid="group-title">{group.name}</h1>
         <p data-testid="group-base-label">{`Balances in ${base}`}</p>
         <div>
-          <CopyLinkButton link={link} testId="copy-link" />
+          <CopyLinkButton link={link} testId="copy-link" /> <ResetLinkButton token={token} onLinkReset={onLinkReset} />
         </div>
       </header>
 
-      {created && (
+      <BaseCurrencyPicker token={token} group={group} onSaved={onSaved} />
+
+      {created && !linkReset && (
         <section data-testid="created-banner">
           <label htmlFor={linkId}>Group created. Share this link with your group:</label>
           <input id={linkId} className="link" type="text" readOnly value={link} />
+          <div>
+            <CopyLinkButton link={link} />
+          </div>
+        </section>
+      )}
+
+      {linkReset && (
+        <section data-testid="new-link-banner">
+          <label htmlFor={newLinkId}>New link made. The old link no longer works. Share this one:</label>
+          <input id={newLinkId} className="link" type="text" readOnly value={link} />
           <div>
             <CopyLinkButton link={link} />
           </div>
@@ -292,6 +535,16 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
         <p data-testid="balances-total">{`Total: ${group.total} ${base}`}</p>
       </section>
 
+      <MembersSection
+        token={token}
+        group={group}
+        onSaved={onSaved}
+        onRemoved={(memberId) => {
+          // The device would otherwise keep pre-selecting someone who is no longer in the group.
+          if (you === memberId) onYouChange("");
+        }}
+      />
+
       <section>
         <h2>Settle up</h2>
         {transfers.length === 0 ? (
@@ -322,7 +575,7 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
       <section>
         <h2>{editing === null ? "Add an expense" : "Edit expense"}</h2>
         <ExpenseForm
-          key={`${group.id}:${formRound}`}
+          key={formKey}
           token={token}
           group={group}
           you={you}
@@ -419,9 +672,16 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
 export function GroupScreen() {
   const token = useSyncExternalStore<string | null | undefined>(subscribeToHash, tokenFromHash, tokenOnServer);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  // The token a reset just put in the address. Its group is already on screen, and loading it again would drop the
+  // new-link banner.
+  const adopted = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof token !== "string") return;
+    if (adopted.current === token) {
+      adopted.current = null;
+      return;
+    }
     const controller = new AbortController();
     const created = createdFlagIsSet();
     void getGroup(token, controller.signal).then((result) => {
@@ -435,6 +695,7 @@ export function GroupScreen() {
           group: result.data,
           link: `${window.location.origin}/g#${token}`,
           created,
+          linkReset: false,
           you: readYou(result.data),
         });
       } else if (result.error === "not_found") {
@@ -463,10 +724,25 @@ export function GroupScreen() {
     );
   }
 
+  function linkWasReset(newToken: string, group: GroupView) {
+    // replaceState swaps the address without a hashchange or a new history entry, so Back never offers the dead link.
+    window.history.replaceState(null, "", "/g#" + newToken);
+    adopted.current = newToken;
+    setLoaded({
+      token: newToken,
+      status: "ready",
+      group,
+      link: `${window.location.origin}/g#${newToken}`,
+      created: false,
+      linkReset: true,
+      you: readYou(group),
+    });
+  }
+
   if (token === undefined) return <p>Loading the group...</p>;
   if (token === null) return <LinkNotFound />;
   if (loaded === null || loaded.token !== token) return <p>Loading the group...</p>;
   if (loaded.status === "not_found") return <LinkNotFound />;
   if (loaded.status === "failed") return <p className="error">{FALLBACK_MESSAGE}</p>;
-  return <GroupBoard ready={loaded} onYouChange={changeYou} onSaved={saved} />;
+  return <GroupBoard ready={loaded} onYouChange={changeYou} onSaved={saved} onLinkReset={linkWasReset} />;
 }

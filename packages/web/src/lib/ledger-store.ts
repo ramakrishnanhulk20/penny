@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  balances,
   currency,
   entryInBase,
   parseAmount,
@@ -11,7 +12,7 @@ import {
   type Rate,
   type Split,
 } from "@penny/core";
-import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, max, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
 import {
   events,
@@ -24,8 +25,18 @@ import {
   type GroupRow,
   type PaymentRow,
 } from "../db/schema";
-import type { AddExpenseBody, AddPaymentBody, CreateGroupBody, EditExpenseBody } from "./api-schemas";
+import {
+  MAX_MEMBERS,
+  MIN_MEMBERS,
+  type AddExpenseBody,
+  type AddMemberBody,
+  type AddPaymentBody,
+  type ChangeBaseCurrencyBody,
+  type CreateGroupBody,
+  type EditExpenseBody,
+} from "./api-schemas";
 import { mintGroupToken } from "./group-token";
+import { rotateGroupToken } from "./groups";
 import { nameKey } from "./text";
 
 /** Live expenses one group may hold (threat model C26). Adding the 501st is refused. */
@@ -85,6 +96,26 @@ export type ExpenseDeletedPayload = { expenseId: string };
 /** The row keeps all its data; its deleted_at is the created_at of this event, both set in one transaction. */
 export type PaymentDeletedPayload = { paymentId: string };
 
+/** Written by createGroup for each first member and by addMember for each later one. */
+export type MemberAddedPayload = { memberId: string; name: string; nameKey: string; position: number };
+
+/** The row keeps all its data; its removed_at is the created_at of this event, both set in one transaction. */
+export type MemberRemovedPayload = { memberId: string };
+
+/** Only ever written while the group has no expense or payment, so no stored amount was entered against `from`. */
+export type BaseCurrencyChangedPayload = { from: string; to: string };
+
+/** Deliberately empty: the log never holds a link token or its hash, old or new. */
+export type LinkResetPayload = Record<string, never>;
+
+/** What a group's whole history says, deleted expenses and undone payments included. */
+export type LedgerHistory = {
+  /** True once the group has had any expense or payment. Its base currency is then fixed (C14). */
+  hasEntries: boolean;
+  /** Every member named in an expense, as payer or in its split as it stands now, or in a payment. */
+  involved: ReadonlySet<string>;
+};
+
 function refuse(status: Refusal["status"], code: string): Refusal {
   return { ok: false, status, code };
 }
@@ -92,6 +123,11 @@ function refuse(status: Refusal["status"], code: string): Refusal {
 // The same answer an unknown token gets, so a foreign id cannot be told apart from a missing group (C1).
 const NOT_FOUND = refuse(404, "not_found");
 const STALE_VERSION = refuse(409, "stale_version");
+const MEMBER_IN_USE = refuse(409, "member_in_use");
+const TOO_FEW_MEMBERS = refuse(409, "too_few_members");
+const TOO_MANY_MEMBERS = refuse(409, "too_many_members");
+// members.position is a smallint, and a removed member keeps their position, so positions only ever grow.
+const MAX_POSITION = 32_767;
 
 const AMOUNT_CODES: Record<AmountError, string> = {
   format: "amount_format",
@@ -317,6 +353,67 @@ function isUniqueViolation(error: unknown, constraint: string): boolean {
   });
 }
 
+// Holding the group row serialises writes to one group. The row is read again under the lock, so a write that
+// resolved its link just before a reset committed is refused like an unknown link (C3), and the base currency used is
+// the one stored now, never one a base change has since replaced (C14). Null means answer 404.
+async function lockGroup(tx: Db, group: GroupRow): Promise<GroupRow | null> {
+  const [row] = await tx.select().from(groups).where(eq(groups.id, group.id)).for("update");
+  if (row === undefined || row.tokenHash !== group.tokenHash) return null;
+  return row;
+}
+
+async function bumpVersion(tx: Db, groupId: string): Promise<void> {
+  await tx
+    .update(groups)
+    .set({ version: sql`${groups.version} + 1` })
+    .where(eq(groups.id, groupId));
+}
+
+/**
+ * Reads which members the group's expenses and payments name, deleted and undone ones included, and whether it has
+ * any at all. Parts are reached through this group's expenses, so the lookup walks the parts primary key instead of
+ * every group's parts.
+ */
+export async function loadHistory(db: Db, groupId: string): Promise<LedgerHistory> {
+  const payers = await db.selectDistinct({ id: expenses.paidBy }).from(expenses).where(eq(expenses.groupId, groupId));
+  const inSplits = await db
+    .selectDistinct({ id: expenseParts.memberId })
+    .from(expenseParts)
+    .where(
+      and(
+        eq(expenseParts.groupId, groupId),
+        inArray(expenseParts.expenseId, db.select({ id: expenses.id }).from(expenses).where(eq(expenses.groupId, groupId))),
+      ),
+    );
+  const sides = await db
+    .selectDistinct({ from: payments.fromMember, to: payments.toMember })
+    .from(payments)
+    .where(eq(payments.groupId, groupId));
+  const involved = new Set<string>([
+    ...payers.map((row) => row.id),
+    ...inSplits.map((row) => row.id),
+    ...sides.flatMap((row) => [row.from, row.to]),
+  ]);
+  // Every expense has a payer and every payment two sides, so these two lists are empty exactly when nothing exists.
+  return { hasEntries: payers.length > 0 || sides.length > 0, involved };
+}
+
+/**
+ * Why one current member cannot be removed, or null when they can. "member_in_use" when they are named in any
+ * expense or payment, deleted ones included, or their balance is not exactly zero; "too_few_members" when the group
+ * would be left with fewer than MIN_MEMBERS. The one rule behind removeMember and the `removable` flag the page shows.
+ */
+export function removalBlock(
+  memberId: string,
+  history: LedgerHistory,
+  totals: ReadonlyMap<string, bigint>,
+  liveMembers: number,
+): "member_in_use" | "too_few_members" | null {
+  if (history.involved.has(memberId) || (totals.get(memberId) ?? BigInt(0)) !== BigInt(0)) return "member_in_use";
+  if (liveMembers <= MIN_MEMBERS) return "too_few_members";
+  return null;
+}
+
 /**
  * Reads one group's members, live expenses with their parts, and live payments, as @penny/core values.
  * Expenses and payments come newest first. Throws if a stored row cannot be read back (an unknown currency or split
@@ -443,20 +540,22 @@ export async function createGroup(db: Db, input: CreateGroupBody): Promise<Store
  * Otherwise the amount, currency, rate and split are checked by @penny/core, the payer and every split member must
  * be current members of this group, and the expense row, its parts and an expense_added event are written in one
  * transaction (201).
- * Refuses: 400 with the codes in the API contract; 404 "not_found" for any member id that is not a current member;
- * 409 "limit_reached" once the group holds MAX_LIVE_EXPENSES live expenses.
+ * Refuses: 400 with the codes in the API contract; 404 "not_found" for any member id that is not a current member,
+ * or when the link was reset after `group` was read; 409 "limit_reached" once the group holds MAX_LIVE_EXPENSES live
+ * expenses.
  */
 export async function addExpense(
   db: Db,
   group: GroupRow,
   input: AddExpenseBody,
 ): Promise<StoreResult<{ status: 200 | 201; expenseId: string }>> {
-  const base = storedCurrency(group.baseCurrency);
   const hash = requestHash(input, "clientId");
   try {
     return await db.transaction(async (tx) => {
       // Holding the group row serialises writes to one group, so the cap and the clientId check cannot race.
-      await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+      const locked = await lockGroup(tx, group);
+      if (locked === null) return NOT_FOUND;
+      const base = storedCurrency(locked.baseCurrency);
 
       const earlier = await findByClientId(tx, group.id, input.clientId);
       if (earlier !== null) return answerRetry(earlier, hash);
@@ -508,8 +607,9 @@ export async function addExpense(
  * A retry of the edit that brought the expense to its current version (the expense is at input.version + 1 and that
  * edit had the same request hash) succeeds again with `edited: false` and writes nothing.
  * Precondition: `expenseId` is a uuid; the route checks it, since Postgres throws on anything else.
- * Refuses: 404 "not_found" when no live expense with this id belongs to this group, or for any member id that is not
- * a current member; 400 with the codes addExpense uses; 409 "stale_version" for any other version.
+ * Refuses: 404 "not_found" when no live expense with this id belongs to this group, for any member id that is not
+ * a current member, or when the link was reset after `group` was read; 400 with the codes addExpense uses; 409
+ * "stale_version" for any other version.
  */
 export async function editExpense(
   db: Db,
@@ -517,12 +617,13 @@ export async function editExpense(
   expenseId: string,
   input: EditExpenseBody,
 ): Promise<StoreResult<{ expenseId: string; edited: boolean }>> {
-  const base = storedCurrency(group.baseCurrency);
   const hash = requestHash(input, "version");
   return db.transaction(async (tx) => {
     // Under the group row lock the version read here is still the version when the update lands, and a retried edit
     // cannot slip in between the version check and the write.
-    await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+    const locked = await lockGroup(tx, group);
+    if (locked === null) return NOT_FOUND;
+    const base = storedCurrency(locked.baseCurrency);
 
     const [row] = await tx
       .select({ id: expenses.id, clientId: expenses.clientId, version: expenses.version, deletedAt: expenses.deletedAt })
@@ -588,8 +689,8 @@ export async function editExpense(
  * (`deleted: true`). An expense that is already deleted succeeds again with `deleted: false`, whatever the version,
  * and nothing is written.
  * Precondition: `expenseId` is a uuid; the route checks it, since Postgres throws on anything else.
- * Refuses: 404 "not_found" when no expense with this id belongs to this group; 409 "stale_version" when `version` is
- * not the live expense's current version.
+ * Refuses: 404 "not_found" when no expense with this id belongs to this group, or the link was reset after `group`
+ * was read; 409 "stale_version" when `version` is not the live expense's current version.
  */
 export async function deleteExpense(
   db: Db,
@@ -599,7 +700,7 @@ export async function deleteExpense(
 ): Promise<StoreResult<{ deleted: boolean }>> {
   return db.transaction(async (tx) => {
     // Under the group row lock two deletes of one expense run one after the other, so only the first one writes.
-    await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+    if ((await lockGroup(tx, group)) === null) return NOT_FOUND;
 
     const [row] = await tx
       .select({ id: expenses.id, version: expenses.version, deletedAt: expenses.deletedAt })
@@ -633,19 +734,21 @@ export async function deleteExpense(
  * for this group's current members, and the payment row and a payment_added event are written in one transaction
  * that also moves the group's version on by one (201).
  * Refuses: 400 with the codes in the API contract; 404 "not_found" when `from` or `to` is not a current member of
- * this group; 409 "limit_reached" once the group holds MAX_LIVE_PAYMENTS live payments.
+ * this group, or when the link was reset after `group` was read; 409 "limit_reached" once the group holds
+ * MAX_LIVE_PAYMENTS live payments.
  */
 export async function addPayment(
   db: Db,
   group: GroupRow,
   input: AddPaymentBody,
 ): Promise<StoreResult<{ status: 200 | 201; paymentId: string }>> {
-  const base = storedCurrency(group.baseCurrency);
   const hash = requestHash(input, "clientId");
   try {
     return await db.transaction(async (tx) => {
       // The same group row lock as addExpense, so the cap and the clientId check cannot race.
-      await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+      const locked = await lockGroup(tx, group);
+      if (locked === null) return NOT_FOUND;
+      const base = storedCurrency(locked.baseCurrency);
 
       const earlier = await findPaymentByClientId(tx, group.id, input.clientId);
       if (earlier !== null) return answerPaymentRetry(earlier, hash);
@@ -732,12 +835,13 @@ export async function addPayment(
  * Undoes one payment of `group`: the row keeps its data and gains deleted_at, and a payment_deleted event is written,
  * in one transaction. A payment that is already undone succeeds again with `undone: false` and nothing is written.
  * Precondition: `paymentId` is a uuid; the route checks it, since Postgres throws on anything else.
- * Refuses: 404 "not_found" when no payment with this id belongs to this group.
+ * Refuses: 404 "not_found" when no payment with this id belongs to this group, or the link was reset after `group`
+ * was read.
  */
 export async function undoPayment(db: Db, group: GroupRow, paymentId: string): Promise<StoreResult<{ undone: boolean }>> {
   return db.transaction(async (tx) => {
     // Under the group row lock two undos of one payment run one after the other, so only the first one writes.
-    await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+    if ((await lockGroup(tx, group)) === null) return NOT_FOUND;
 
     const [row] = await tx
       .select({ id: payments.id, deletedAt: payments.deletedAt })
@@ -756,5 +860,151 @@ export async function undoPayment(db: Db, group: GroupRow, paymentId: string): P
     const payload: PaymentDeletedPayload = { paymentId: row.id };
     await tx.insert(events).values({ groupId: group.id, kind: "payment_deleted", entityId: row.id, payload });
     return { ok: true, value: { undone: true } };
+  });
+}
+
+/**
+ * Adds one member to the end of `group`'s list, under the same name rules as group creation. Writes the member row,
+ * a member_added event (the one createGroup writes per member) and moves the group's version on by one, in one
+ * transaction.
+ * Refuses: 404 "not_found" when the link was reset after `group` was read; 409 "too_many_members" once the group
+ * holds MAX_MEMBERS live members; 400 "duplicate_member_name" when a live member already has this name key. The
+ * database's partial unique index decides that, so two adds of one name at once cannot both land.
+ */
+export async function addMember(db: Db, group: GroupRow, input: AddMemberBody): Promise<StoreResult<{ memberId: string }>> {
+  const key = nameKey(input.name);
+  try {
+    return await db.transaction(async (tx) => {
+      if ((await lockGroup(tx, group)) === null) return NOT_FOUND;
+
+      const [{ live }] = await tx
+        .select({ live: count() })
+        .from(members)
+        .where(and(eq(members.groupId, group.id), isNull(members.removedAt)));
+      if (live >= MAX_MEMBERS) return TOO_MANY_MEMBERS;
+      const [{ last }] = await tx
+        .select({ last: max(members.position) })
+        .from(members)
+        .where(eq(members.groupId, group.id));
+      const position = (last ?? -1) + 1;
+      if (position > MAX_POSITION) return TOO_MANY_MEMBERS;
+
+      const [person] = await tx
+        .insert(members)
+        .values({ groupId: group.id, name: input.name, nameKey: key, position })
+        .returning();
+      const payload: MemberAddedPayload = {
+        memberId: person.id,
+        name: person.name,
+        nameKey: person.nameKey,
+        position: person.position,
+      };
+      await tx.insert(events).values({ groupId: group.id, kind: "member_added", entityId: person.id, payload });
+      await bumpVersion(tx, group.id);
+      return { ok: true, value: { memberId: person.id } };
+    });
+  } catch (error) {
+    if (isUniqueViolation(error, "members_live_name_key_unique")) return refuse(400, "duplicate_member_name");
+    throw error;
+  }
+}
+
+/**
+ * Removes one current member of `group` who is named in no expense (as payer or in its split) and no payment,
+ * deleted and undone ones included, and whose balance is exactly zero, so no one else's balance can move. The row
+ * keeps its data and gains removed_at, a member_removed event is written and the group's version moves on by one, in
+ * one transaction (`removed: true`). A member already removed succeeds again with `removed: false` and nothing is
+ * written.
+ * Precondition: `memberId` is a uuid; the route checks it, since Postgres throws on anything else.
+ * Refuses: 404 "not_found" when no member with this id belongs to this group, or the link was reset after `group` was
+ * read; 409 "member_in_use" for a member who is named anywhere or has a non-zero balance; 409 "too_few_members" when
+ * the group would be left with fewer than MIN_MEMBERS.
+ */
+export async function removeMember(db: Db, group: GroupRow, memberId: string): Promise<StoreResult<{ removed: boolean }>> {
+  return db.transaction(async (tx) => {
+    // Under the group row lock no expense or payment can name this member between the checks and the removal.
+    const locked = await lockGroup(tx, group);
+    if (locked === null) return NOT_FOUND;
+
+    const [row] = await tx
+      .select({ id: members.id, removedAt: members.removedAt })
+      .from(members)
+      .where(and(eq(members.groupId, group.id), eq(members.id, memberId)))
+      .limit(1);
+    if (row === undefined) return NOT_FOUND;
+    if (row.removedAt !== null) return { ok: true, value: { removed: false } };
+
+    const history = await loadHistory(tx, group.id);
+    const ledger = await loadLedger(tx, group.id);
+    const entries = [...ledger.expenses.map((item) => item.entry), ...ledger.payments.map((item) => item.entry)];
+    const totals = balances(
+      storedCurrency(locked.baseCurrency),
+      ledger.members.map((member) => member.id),
+      entries,
+    );
+    if (!totals.ok) throw new Error(`stored_ledger_invalid_${totals.error}`);
+    const live = ledger.members.filter((member) => member.current).length;
+    const blocked = removalBlock(row.id, history, totals.value, live);
+    if (blocked === "member_in_use") return MEMBER_IN_USE;
+    if (blocked === "too_few_members") return TOO_FEW_MEMBERS;
+
+    // From here on the id is the one Postgres stored, so the event never carries the caller's spelling of it.
+    // now() is the transaction's start time, the same instant the event's created_at gets.
+    await tx
+      .update(members)
+      .set({ removedAt: sql`now()` })
+      .where(and(eq(members.groupId, group.id), eq(members.id, row.id)));
+    const payload: MemberRemovedPayload = { memberId: row.id };
+    await tx.insert(events).values({ groupId: group.id, kind: "member_removed", entityId: row.id, payload });
+    await bumpVersion(tx, group.id);
+    return { ok: true, value: { removed: true } };
+  });
+}
+
+/**
+ * Changes `group`'s base currency, only while the group has never had an expense or payment, deleted and undone ones
+ * included, so no stored rate is ever read against a base it was not entered for (C14). Writes the new code, a
+ * base_currency_changed event and moves the group's version on by one, in one transaction (`changed: true`). Asking
+ * for the base the group already has succeeds with `changed: false` and writes nothing.
+ * Refuses: 400 "bad_currency" for a code @penny/core does not know; 404 "not_found" when the link was reset after
+ * `group` was read; 409 "base_locked" once the group has had any expense or payment.
+ */
+export async function changeBaseCurrency(
+  db: Db,
+  group: GroupRow,
+  input: ChangeBaseCurrencyBody,
+): Promise<StoreResult<{ changed: boolean }>> {
+  const next = currency(input.baseCurrency);
+  if (next === null) return refuse(400, "bad_currency");
+  return db.transaction(async (tx) => {
+    // Under the group row lock no expense or payment can land between the history check and the change.
+    const locked = await lockGroup(tx, group);
+    if (locked === null) return NOT_FOUND;
+    if ((await loadHistory(tx, group.id)).hasEntries) return refuse(409, "base_locked");
+    if (locked.baseCurrency === next.code) return { ok: true, value: { changed: false } };
+
+    await tx.update(groups).set({ baseCurrency: next.code }).where(eq(groups.id, group.id));
+    const payload: BaseCurrencyChangedPayload = { from: locked.baseCurrency, to: next.code };
+    await tx.insert(events).values({ groupId: group.id, kind: "base_currency_changed", entityId: group.id, payload });
+    await bumpVersion(tx, group.id);
+    return { ok: true, value: { changed: true } };
+  });
+}
+
+/**
+ * Gives `group` a new link token: its hash replaces the old one, a link_reset event that names no token or hash is
+ * written, and the group's version moves on by one, in one transaction. Returns the new token, which must go to the
+ * caller and nowhere else.
+ * Refuses: 404 "not_found" when the link was already reset after `group` was read, so two resets at once leave one
+ * working link, held by whoever made it.
+ */
+export async function resetLink(db: Db, group: GroupRow): Promise<StoreResult<{ token: string }>> {
+  return db.transaction(async (tx) => {
+    if ((await lockGroup(tx, group)) === null) return NOT_FOUND;
+    const token = await rotateGroupToken(tx, group.id);
+    const payload: LinkResetPayload = {};
+    await tx.insert(events).values({ groupId: group.id, kind: "link_reset", entityId: group.id, payload });
+    await bumpVersion(tx, group.id);
+    return { ok: true, value: { token } };
   });
 }

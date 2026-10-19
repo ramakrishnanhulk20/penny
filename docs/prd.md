@@ -82,11 +82,11 @@ Any unexpected failure shows "Something went wrong. Try again." While the group 
 
 **Payments** list: "<From> paid <To> <amount> <BASE>", each with "Undo".
 
-**Reset link**: asks "Make a new link? The old link will stop working for everyone." with "Make new link" and "Cancel". After confirming, the page shows the new link with "Copy link", and the old link opens the not-found page.
+**Reset link**: asks "Make a new link? The old link will stop working for everyone." with "Make new link" and "Cancel". After confirming, the page shows "New link made. The old link no longer works. Share this one:" followed by the new link and a "Copy link" button, and the old link opens the not-found page.
 
-**Members**: "Add member" adds a member (same name rules). "Remove" next to a member is offered only for members with a zero balance who appear in no expense or payment; otherwise the button is absent.
+**Members** section, after Balances, one row per member: a "New member" field with "Add member" adds a member (same name rules; errors "Each member needs a different name.", "Names can be at most 40 characters.", and "A group can have at most 20 members."). "Remove" next to a member is offered only for members with a zero balance who appear in no expense or payment (deleted ones included), and only while the group has more than two members; otherwise the button is absent. If the member gained an expense or payment before "Remove" landed: "Only a member with no expenses or payments can be removed."
 
-**Base currency**: can be changed only while the group has no expenses or payments; afterwards it is shown as fixed.
+**Base currency**: a "Base currency" list with a "Change" button, shown only while the group has never had an expense or payment. Once one has been recorded, even if it was later deleted, the page shows "Base currency is fixed once money is recorded." instead.
 
 ### 4. Link not found
 Any group link that is malformed, unknown or reset shows: "This link doesn't open a group. It may have been reset. Ask the group for the current link." and a "Start a group" button.

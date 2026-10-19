@@ -1,9 +1,12 @@
 import { expect } from "vitest";
 import { DELETE as deleteExpenseRoute, PATCH as editExpenseRoute } from "@/app/api/group/expenses/[expenseId]/route";
 import { POST as addExpenseRoute } from "@/app/api/group/expenses/route";
+import { DELETE as removeMemberRoute } from "@/app/api/group/members/[memberId]/route";
+import { POST as addMemberRoute } from "@/app/api/group/members/route";
 import { DELETE as undoPaymentRoute } from "@/app/api/group/payments/[paymentId]/route";
 import { POST as addPaymentRoute } from "@/app/api/group/payments/route";
-import { GET as getGroupRoute } from "@/app/api/group/route";
+import { POST as resetLinkRoute } from "@/app/api/group/reset-link/route";
+import { GET as getGroupRoute, PATCH as changeGroupRoute } from "@/app/api/group/route";
 import { POST as createGroupRoute } from "@/app/api/groups/route";
 import type {
   AddExpenseRequest,
@@ -123,6 +126,30 @@ export function deletePayment(token: string | null, paymentId: string): Promise<
     headers,
   });
   return undoPaymentRoute(request, { params: Promise.resolve({ paymentId }) });
+}
+
+export function postMember(token: string, body: unknown): Promise<Response> {
+  return addMemberRoute(jsonRequest("/api/group/members", body, token));
+}
+
+/** DELETE /api/group/members/{memberId}, with the params Next.js would pass for that path. */
+export function deleteMember(token: string | null, memberId: string): Promise<Response> {
+  const headers = new Headers();
+  if (token !== null) headers.set(GROUP_TOKEN_HEADER, token);
+  const request = new Request(`http://localhost/api/group/members/${encodeURIComponent(memberId)}`, {
+    method: "DELETE",
+    headers,
+  });
+  return removeMemberRoute(request, { params: Promise.resolve({ memberId }) });
+}
+
+/** PATCH /api/group, the base currency change. */
+export function patchGroup(token: string, body: unknown): Promise<Response> {
+  return changeGroupRoute(jsonRequest("/api/group", body, token, "PATCH"));
+}
+
+export function postResetLink(token: string, body: unknown = {}): Promise<Response> {
+  return resetLinkRoute(jsonRequest("/api/group/reset-link", body, token));
 }
 
 /** Minor units of an amount the API wrote: formatAmount always writes every decimal, so dropping the point is exact. */

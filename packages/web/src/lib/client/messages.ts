@@ -30,7 +30,8 @@ export function cleanText(raw: string): string {
 
 /** True when the cleaned text is longer than `max` characters. */
 export function isTooLong(raw: string, max: number): boolean {
-  return cleanText(raw).length > max;
+  // Characters, not UTF-16 units, so an emoji counts once here exactly as it does on the server.
+  return [...cleanText(raw)].length > max;
 }
 
 /**
@@ -52,6 +53,12 @@ export function messageFor(code: string, context: MessageContext = {}): string {
       return "Each member needs a different name.";
     case "bad_member_name":
       return "Names can be at most 40 characters.";
+    case "too_many_members":
+      return "A group can have at most 20 members.";
+    case "member_in_use":
+      return "Only a member with no expenses or payments can be removed.";
+    case "base_locked":
+      return "Base currency is fixed once money is recorded.";
     case "bad_description":
       return "Describe the expense.";
     case "amount_format":

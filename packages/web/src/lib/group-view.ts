@@ -13,7 +13,7 @@ import { eq } from "drizzle-orm";
 import type { Db } from "../db/client";
 import { groups, type GroupRow } from "../db/schema";
 import type { ExpenseView, GroupView, PaymentView } from "./api-types";
-import { loadLedger, type LedgerExpense, type LedgerPayment } from "./ledger-store";
+import { loadHistory, loadLedger, removalBlock, type LedgerExpense, type LedgerPayment } from "./ledger-store";
 
 function expenseView(item: LedgerExpense, base: Currency, known: ReadonlySet<string>): ExpenseView {
   const { entry } = item;
@@ -61,24 +61,34 @@ function paymentView(item: LedgerPayment, base: Currency, known: ReadonlySet<str
 }
 
 /**
- * The whole group as the page shows it: current members in position order, one balance each, the settle-up plan,
- * and the live expenses and live payments newest first, every amount formatted by @penny/core.
+ * The whole group as the page shows it: current members in position order with whether each can be removed, one
+ * balance each, the settle-up plan, whether the base currency is fixed, and the live expenses and live payments
+ * newest first, every amount formatted by @penny/core.
  * All reads run in one read-only, repeatable-read transaction, so the view is one consistent moment and this path
  * cannot write. Throws if the balances or the plan fail their own sum checks; such a view is never returned.
  */
 export async function buildGroupView(db: Db, group: GroupRow): Promise<GroupView> {
-  const base = currency(group.baseCurrency);
-  if (base === null) throw new Error("stored_currency_invalid");
-  const { version, ledger } = await db.transaction(
+  const { version, baseCurrency, ledger, history } = await db.transaction(
     async (tx) => {
       // Read in the same snapshot as the entries rather than taken from `group`: the settle-up buttons key their
-      // clientIds on this version, so it must belong to exactly the payments shown.
-      const [row] = await tx.select({ version: groups.version }).from(groups).where(eq(groups.id, group.id));
+      // clientIds on this version, so it must belong to exactly the payments shown, and the base may have changed
+      // since `group` was read.
+      const [row] = await tx
+        .select({ version: groups.version, baseCurrency: groups.baseCurrency })
+        .from(groups)
+        .where(eq(groups.id, group.id));
       if (row === undefined) throw new Error("group_missing");
-      return { version: row.version, ledger: await loadLedger(tx, group.id) };
+      return {
+        version: row.version,
+        baseCurrency: row.baseCurrency,
+        ledger: await loadLedger(tx, group.id),
+        history: await loadHistory(tx, group.id),
+      };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
+  const base = currency(baseCurrency);
+  if (base === null) throw new Error("stored_currency_invalid");
 
   // Removed members stay in the sums so their history still adds up; they are only left out of what is shown.
   const everyone = ledger.members.map((member) => member.id);
@@ -98,8 +108,13 @@ export async function buildGroupView(db: Db, group: GroupRow): Promise<GroupView
     name: group.name,
     baseCurrency: base.code,
     baseDigits: base.digits,
+    baseLocked: history.hasEntries,
     version,
-    members: current.map((member) => ({ id: member.id, name: member.name })),
+    members: current.map((member) => ({
+      id: member.id,
+      name: member.name,
+      removable: removalBlock(member.id, history, totals.value, current.length) === null,
+    })),
     balances: shown.map((row) => ({ memberId: row.memberId, amount: formatAmount(row.amount, base) })),
     total: formatAmount(total, base),
     settlement: {
