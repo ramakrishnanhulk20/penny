@@ -11,24 +11,38 @@ import {
   type Rate,
   type Split,
 } from "@penny/core";
-import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client";
-import { events, expenseParts, expenses, groups, members, payments, type ExpenseRow, type GroupRow } from "../db/schema";
-import type { AddExpenseBody, CreateGroupBody } from "./api-schemas";
+import {
+  events,
+  expenseParts,
+  expenses,
+  groups,
+  members,
+  payments,
+  type ExpenseRow,
+  type GroupRow,
+  type PaymentRow,
+} from "../db/schema";
+import type { AddExpenseBody, AddPaymentBody, CreateGroupBody } from "./api-schemas";
 import { mintGroupToken } from "./group-token";
 import { nameKey } from "./text";
 
 /** Live expenses one group may hold (threat model C26). Adding the 501st is refused. */
 export const MAX_LIVE_EXPENSES = 500;
+/** Live payments one group may hold (threat model C26). Adding the 501st is refused; an undone one frees its place. */
+export const MAX_LIVE_PAYMENTS = 500;
 
 export type Refusal = { ok: false; status: 400 | 404 | 409; code: string };
 export type StoreResult<T> = { ok: true; value: T } | Refusal;
 
 export type ExpenseEntry = Extract<Entry, { kind: "expense" }>;
+export type PaymentEntry = Extract<Entry, { kind: "payment" }>;
 export type LedgerMember = { id: string; name: string; position: number; current: boolean };
 export type LedgerExpense = { entry: ExpenseEntry; description: string; version: number; createdAt: Date };
-/** Members in position order, removed ones included and marked; live expenses newest first; live payments. */
-export type Ledger = { members: LedgerMember[]; expenses: LedgerExpense[]; payments: Entry[] };
+export type LedgerPayment = { entry: PaymentEntry; createdAt: Date };
+/** Members in position order, removed ones included and marked; live expenses and live payments, each newest first. */
+export type Ledger = { members: LedgerMember[]; expenses: LedgerExpense[]; payments: LedgerPayment[] };
 
 /** Everything needed to rebuild an expense row and its parts from the event log alone. */
 export type ExpenseAddedPayload = {
@@ -44,6 +58,22 @@ export type ExpenseAddedPayload = {
   splitMode: Split["mode"];
   parts: { memberId: string; weight: string }[];
 };
+
+/** Everything needed to rebuild a payment row from the event log alone. */
+export type PaymentAddedPayload = {
+  paymentId: string;
+  clientId: string;
+  requestHash: string;
+  from: string;
+  to: string;
+  currency: string;
+  amountMinor: string;
+  rateUnits: string | null;
+  rateScale: string | null;
+};
+
+/** The row keeps all its data; its deleted_at is the created_at of this event, both set in one transaction. */
+export type PaymentDeletedPayload = { paymentId: string };
 
 function refuse(status: Refusal["status"], code: string): Refusal {
   return { ok: false, status, code };
@@ -154,7 +184,7 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function requestHash(input: AddExpenseBody): string {
+function requestHash(input: AddExpenseBody | AddPaymentBody): string {
   const withoutClientId = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "clientId"));
   return createHash("sha256").update(canonicalJson(withoutClientId), "utf8").digest("hex");
 }
@@ -173,6 +203,20 @@ async function findByClientId(db: Db, groupId: string, clientId: string): Promis
   return rows[0] ?? null;
 }
 
+function answerPaymentRetry(earlier: PaymentRow, hash: string): StoreResult<{ status: 200 | 201; paymentId: string }> {
+  if (earlier.requestHash !== hash) return refuse(409, "client_id_conflict");
+  return { ok: true, value: { status: 200, paymentId: earlier.id } };
+}
+
+async function findPaymentByClientId(db: Db, groupId: string, clientId: string): Promise<PaymentRow | null> {
+  const rows = await db
+    .select()
+    .from(payments)
+    .where(and(eq(payments.groupId, groupId), eq(payments.clientId, clientId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 // Drizzle wraps the driver error, and the Postgres code and constraint name sit on its cause.
 function isUniqueViolation(error: unknown, constraint: string): boolean {
   const cause = (error as { cause?: unknown } | null)?.cause;
@@ -184,7 +228,8 @@ function isUniqueViolation(error: unknown, constraint: string): boolean {
 
 /**
  * Reads one group's members, live expenses with their parts, and live payments, as @penny/core values.
- * Expenses come newest first. Throws if a stored row cannot be read back (an unknown currency or split mode).
+ * Expenses and payments come newest first. Throws if a stored row cannot be read back (an unknown currency or split
+ * mode).
  */
 export async function loadLedger(db: Db, groupId: string): Promise<Ledger> {
   const memberRows = await db.select().from(members).where(eq(members.groupId, groupId)).orderBy(asc(members.position));
@@ -213,7 +258,7 @@ export async function loadLedger(db: Db, groupId: string): Promise<Ledger> {
     .select()
     .from(payments)
     .where(and(eq(payments.groupId, groupId), isNull(payments.deletedAt)))
-    .orderBy(asc(payments.createdAt), asc(payments.id));
+    .orderBy(desc(payments.createdAt), desc(payments.id));
 
   const positions = new Map(memberRows.map((row) => [row.id, row.position]));
   const partsByExpense = new Map<string, { memberId: string; weight: bigint }[]>();
@@ -245,13 +290,16 @@ export async function loadLedger(db: Db, groupId: string): Promise<Ledger> {
       createdAt: row.createdAt,
     })),
     payments: paymentRows.map((row) => ({
-      kind: "payment",
-      id: row.id,
-      from: row.fromMember,
-      to: row.toMember,
-      currency: storedCurrency(row.currency),
-      amount: row.amountMinor,
-      rate: storedRate(row.rateUnits, row.rateScale),
+      entry: {
+        kind: "payment",
+        id: row.id,
+        from: row.fromMember,
+        to: row.toMember,
+        currency: storedCurrency(row.currency),
+        amount: row.amountMinor,
+        rate: storedRate(row.rateUnits, row.rateScale),
+      },
+      createdAt: row.createdAt,
     })),
   };
 }
@@ -398,4 +446,138 @@ export async function addExpense(
     if (winner === null) throw error;
     return answerRetry(winner, hash);
   }
+}
+
+/**
+ * Records that one current member of `group` paid another, exactly once per clientId.
+ * A repeat of an earlier clientId with the same body (compared by request_hash) answers 200 with the original
+ * payment id and writes nothing; with a different body it is 409 "client_id_conflict".
+ * Otherwise the currency, amount and rate are parsed, @penny/core's entryInBase decides whether the payment is valid
+ * for this group's current members, and the payment row and a payment_added event are written in one transaction
+ * that also moves the group's version on by one (201).
+ * Refuses: 400 with the codes in the API contract; 404 "not_found" when `from` or `to` is not a current member of
+ * this group; 409 "limit_reached" once the group holds MAX_LIVE_PAYMENTS live payments.
+ */
+export async function addPayment(
+  db: Db,
+  group: GroupRow,
+  input: AddPaymentBody,
+): Promise<StoreResult<{ status: 200 | 201; paymentId: string }>> {
+  const base = storedCurrency(group.baseCurrency);
+  const hash = requestHash(input);
+  try {
+    return await db.transaction(async (tx) => {
+      // The same group row lock as addExpense, so the cap and the clientId check cannot race.
+      await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+
+      const earlier = await findPaymentByClientId(tx, group.id, input.clientId);
+      if (earlier !== null) return answerPaymentRetry(earlier, hash);
+
+      const [{ live }] = await tx
+        .select({ live: count() })
+        .from(payments)
+        .where(and(eq(payments.groupId, group.id), isNull(payments.deletedAt)));
+      if (live >= MAX_LIVE_PAYMENTS) return refuse(409, "limit_reached");
+
+      const current = await tx
+        .select({ id: members.id })
+        .from(members)
+        .where(and(eq(members.groupId, group.id), isNull(members.removedAt)));
+
+      const cur = currency(input.currency);
+      if (cur === null) return refuse(400, "bad_currency");
+      const amount = parseAmount(input.amount, cur);
+      if (!amount.ok) return refuse(400, AMOUNT_CODES[amount.error]);
+      let rate: Rate | null = null;
+      if (input.rate !== null) {
+        const parsed = parseRate(input.rate);
+        if (!parsed.ok) return refuse(400, `rate_${parsed.error}`);
+        rate = parsed.value;
+      }
+
+      const entry: PaymentEntry = {
+        kind: "payment",
+        id: randomUUID(),
+        from: input.from,
+        to: input.to,
+        currency: cur,
+        amount: amount.value,
+        rate,
+      };
+      // Only this group's current members are known here, so a member of another group, or a removed one, comes back
+      // as unknown_member and gets the same 404 as an unknown token.
+      const checked = entryInBase(entry, base, new Set(current.map((member) => member.id)));
+      if (!checked.ok) return LEDGER_REFUSALS[checked.error];
+
+      await tx.insert(payments).values({
+        id: entry.id,
+        groupId: group.id,
+        clientId: input.clientId,
+        requestHash: hash,
+        fromMember: entry.from,
+        toMember: entry.to,
+        currency: cur.code,
+        amountMinor: entry.amount,
+        rateUnits: rate?.units ?? null,
+        rateScale: rate?.scale ?? null,
+      });
+      const payload: PaymentAddedPayload = {
+        paymentId: entry.id,
+        clientId: input.clientId,
+        requestHash: hash,
+        from: entry.from,
+        to: entry.to,
+        currency: cur.code,
+        amountMinor: entry.amount.toString(),
+        rateUnits: rate === null ? null : rate.units.toString(),
+        rateScale: rate === null ? null : String(rate.scale),
+      };
+      await tx.insert(events).values({ groupId: group.id, kind: "payment_added", entityId: entry.id, payload });
+      // The page keys each settle-up line's clientId on the version it shows. Moving it here retires every key built
+      // from the old version, so a line shown again later (after an undo, or new expenses) records a fresh payment
+      // instead of replaying this one.
+      await tx
+        .update(groups)
+        .set({ version: sql`${groups.version} + 1` })
+        .where(eq(groups.id, group.id));
+      return { ok: true, value: { status: 201, paymentId: entry.id } };
+    });
+  } catch (error) {
+    // The unique constraint is the last word on "one row per clientId", even if the lock above were ever removed.
+    if (!isUniqueViolation(error, "payments_group_id_client_id_unique")) throw error;
+    const winner = await findPaymentByClientId(db, group.id, input.clientId);
+    if (winner === null) throw error;
+    return answerPaymentRetry(winner, hash);
+  }
+}
+
+/**
+ * Undoes one payment of `group`: the row keeps its data and gains deleted_at, and a payment_deleted event is written,
+ * in one transaction. A payment that is already undone succeeds again with `undone: false` and nothing is written.
+ * Precondition: `paymentId` is a uuid; the route checks it, since Postgres throws on anything else.
+ * Refuses: 404 "not_found" when no payment with this id belongs to this group.
+ */
+export async function undoPayment(db: Db, group: GroupRow, paymentId: string): Promise<StoreResult<{ undone: boolean }>> {
+  return db.transaction(async (tx) => {
+    // Under the group row lock two undos of one payment run one after the other, so only the first one writes.
+    await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+
+    const [row] = await tx
+      .select({ id: payments.id, deletedAt: payments.deletedAt })
+      .from(payments)
+      .where(and(eq(payments.groupId, group.id), eq(payments.id, paymentId)))
+      .limit(1);
+    if (row === undefined) return NOT_FOUND;
+    if (row.deletedAt !== null) return { ok: true, value: { undone: false } };
+
+    // From here on the id is the one Postgres stored, so the event never carries the caller's spelling of it.
+    // now() is the transaction's start time, the same instant the event's created_at gets.
+    await tx
+      .update(payments)
+      .set({ deletedAt: sql`now()` })
+      .where(and(eq(payments.groupId, group.id), eq(payments.id, row.id)));
+    const payload: PaymentDeletedPayload = { paymentId: row.id };
+    await tx.insert(events).values({ groupId: group.id, kind: "payment_deleted", entityId: row.id, payload });
+    return { ok: true, value: { undone: true } };
+  });
 }

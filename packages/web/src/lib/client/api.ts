@@ -1,9 +1,12 @@
 import type {
   AddExpenseRequest,
   AddExpenseResponse,
+  AddPaymentRequest,
+  AddPaymentResponse,
   CreateGroupRequest,
   CreateGroupResponse,
   GroupView,
+  UndoPaymentResponse,
 } from "@/lib/api-types";
 
 /** The success body, or the short code the server sent ("network" when no answer arrived, "internal" when it was unreadable). */
@@ -59,5 +62,23 @@ export function addExpense(token: string, request: AddExpenseRequest): Promise<A
     method: "POST",
     headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
     body: JSON.stringify(request),
+  });
+}
+
+/** POST /api/group/payments. A repeat with the same clientId and body returns the first result instead of a second payment. */
+export function addPayment(token: string, request: AddPaymentRequest): Promise<ApiResult<AddPaymentResponse>> {
+  return send<AddPaymentResponse>("/api/group/payments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
+    body: JSON.stringify(request),
+  });
+}
+
+/** DELETE /api/group/payments/{id}. Undoing a payment that is already undone succeeds again and changes nothing. */
+export function undoPayment(token: string, paymentId: string): Promise<ApiResult<UndoPaymentResponse>> {
+  // The id came from a server response, but it is still encoded so no value can change which path is called.
+  return send<UndoPaymentResponse>(`/api/group/payments/${encodeURIComponent(paymentId)}`, {
+    method: "DELETE",
+    headers: { [GROUP_HEADER]: token },
   });
 }

@@ -1,6 +1,6 @@
 import { MAX_PARTS } from "@penny/core";
 import { z } from "zod";
-import type { AddExpenseRequest, CreateGroupRequest } from "./api-types";
+import type { AddExpenseRequest, AddPaymentRequest, CreateGroupRequest } from "./api-types";
 import { cleanName } from "./text";
 
 /** Bodies above this many bytes are refused before any parsing. */
@@ -35,6 +35,7 @@ function cleanText(max: number, code: string) {
 }
 
 const memberId = z.string();
+const clientId = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 
 export const splitBody = z.discriminatedUnion("mode", [
   z.strictObject({
@@ -66,7 +67,7 @@ export const createGroupBody = z.strictObject({
 }) satisfies z.ZodType<unknown, CreateGroupRequest>;
 
 export const addExpenseBody = z.strictObject({
-  clientId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+  clientId,
   description: cleanText(DESCRIPTION_MAX, "bad_description"),
   amount: z.string(),
   currency: z.string(),
@@ -75,8 +76,18 @@ export const addExpenseBody = z.strictObject({
   split: splitBody,
 }) satisfies z.ZodType<unknown, AddExpenseRequest>;
 
+export const addPaymentBody = z.strictObject({
+  clientId,
+  from: memberId,
+  to: memberId,
+  amount: z.string(),
+  currency: z.string(),
+  rate: z.string().nullable(),
+}) satisfies z.ZodType<unknown, AddPaymentRequest>;
+
 export type CreateGroupBody = z.output<typeof createGroupBody>;
 export type AddExpenseBody = z.output<typeof addExpenseBody>;
+export type AddPaymentBody = z.output<typeof addPaymentBody>;
 
 export type ParsedBody<T> = { ok: true; value: T } | { ok: false; code: string };
 

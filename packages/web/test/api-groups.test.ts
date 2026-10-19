@@ -63,6 +63,7 @@ describe("POST /api/groups", () => {
       total: "0.00",
       settlement: { transfers: [], expenseCount: 0 },
       expenses: [],
+      payments: [],
     });
 
     const [stored] = await db.select().from(groups).where(eq(groups.id, group.id));

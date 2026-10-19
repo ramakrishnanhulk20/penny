@@ -1,8 +1,16 @@
 import { expect } from "vitest";
 import { POST as addExpenseRoute } from "@/app/api/group/expenses/route";
+import { DELETE as undoPaymentRoute } from "@/app/api/group/payments/[paymentId]/route";
+import { POST as addPaymentRoute } from "@/app/api/group/payments/route";
 import { GET as getGroupRoute } from "@/app/api/group/route";
 import { POST as createGroupRoute } from "@/app/api/groups/route";
-import type { AddExpenseRequest, CreateGroupRequest, CreateGroupResponse, GroupView } from "@/lib/api-types";
+import type {
+  AddExpenseRequest,
+  AddPaymentRequest,
+  CreateGroupRequest,
+  CreateGroupResponse,
+  GroupView,
+} from "@/lib/api-types";
 import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 
 export function groupBody(overrides: Partial<CreateGroupRequest> = {}): CreateGroupRequest {
@@ -58,6 +66,34 @@ export function expenseBody(group: GroupView, overrides: Partial<AddExpenseReque
 
 export function postExpense(token: string, body: unknown): Promise<Response> {
   return addExpenseRoute(jsonRequest("/api/group/expenses", body, token));
+}
+
+/** A payment of 10 in the base currency from the second member to the first. */
+export function paymentBody(group: GroupView, overrides: Partial<AddPaymentRequest> = {}): AddPaymentRequest {
+  return {
+    clientId: `test-${crypto.randomUUID()}`,
+    from: group.members[1].id,
+    to: group.members[0].id,
+    amount: group.baseDigits === 0 ? "10" : `10.${"0".repeat(group.baseDigits)}`,
+    currency: group.baseCurrency,
+    rate: null,
+    ...overrides,
+  };
+}
+
+export function postPayment(token: string, body: unknown): Promise<Response> {
+  return addPaymentRoute(jsonRequest("/api/group/payments", body, token));
+}
+
+/** DELETE /api/group/payments/{paymentId}, with the params Next.js would pass for that path. */
+export function deletePayment(token: string | null, paymentId: string): Promise<Response> {
+  const headers = new Headers();
+  if (token !== null) headers.set(GROUP_TOKEN_HEADER, token);
+  const request = new Request(`http://localhost/api/group/payments/${encodeURIComponent(paymentId)}`, {
+    method: "DELETE",
+    headers,
+  });
+  return undoPaymentRoute(request, { params: Promise.resolve({ paymentId }) });
 }
 
 /** Minor units of an amount the API wrote: formatAmount always writes every decimal, so dropping the point is exact. */
