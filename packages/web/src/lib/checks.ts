@@ -141,9 +141,10 @@ function prUrlFor(number: number): string {
   return `https://github.com/${REPO}/pull/${number}`;
 }
 
-// Upstream text cannot be refused the way a typed name can, so the disguising characters are dropped instead.
+// Upstream text cannot be refused the way a typed name can, so the disguising characters are dropped instead. A lone
+// surrogate (a JSON escape can carry one) becomes U+FFFD first: Postgres refuses it in jsonb, which would fail the save.
 function plainTitle(raw: string): string {
-  return [...raw.replace(CONTROL_OR_FORMAT, "").normalize("NFC").trim()].slice(0, TITLE_MAX).join("");
+  return [...raw.toWellFormed().replace(CONTROL_OR_FORMAT, "").normalize("NFC").trim()].slice(0, TITLE_MAX).join("");
 }
 
 function runningCommit(): string | null {
@@ -340,13 +341,18 @@ function readStoredPayload(payload: unknown): ChecksSnapshot | null {
   };
 }
 
-type Stored = { readonly snapshot: ChecksSnapshot; readonly triedAt: Date };
+// Stored when a refresh fails before there has ever been a good read, so the next try still waits out the window. It
+// fails storedSnapshotSchema like any unreadable payload, so it is never served.
+const NO_GOOD_READ = { noGoodRead: true };
+
+// `snapshot` is null when the row holds no good read (the placeholder, or a payload that fails its checks); its time
+// still paces the next refresh.
+type Stored = { readonly snapshot: ChecksSnapshot | null; readonly triedAt: Date };
 
 async function loadStored(db: Db): Promise<Stored | null> {
   const [row] = await db.select().from(checksSnapshot).where(eq(checksSnapshot.id, SNAPSHOT_ID));
   if (row === undefined) return null;
-  const snapshot = readStoredPayload(row.payload);
-  return snapshot === null ? null : { snapshot, triedAt: row.fetchedAt };
+  return { snapshot: readStoredPayload(row.payload), triedAt: row.fetchedAt };
 }
 
 // A row stamped in the future (a server with a fast clock) counts as due, so a bad clock cannot freeze the page.
@@ -364,11 +370,11 @@ async function takeRefreshLock(tx: Db): Promise<boolean> {
   return answer.success && answer.data.rows[0].locked;
 }
 
-async function saveSnapshot(tx: Db, snapshot: ChecksSnapshot, now: Date): Promise<void> {
+async function saveSnapshot(tx: Db, payload: ChecksSnapshot | typeof NO_GOOD_READ, now: Date): Promise<void> {
   await tx
     .insert(checksSnapshot)
-    .values({ id: SNAPSHOT_ID, payload: snapshot, fetchedAt: now })
-    .onConflictDoUpdate({ target: checksSnapshot.id, set: { payload: snapshot, fetchedAt: now } });
+    .values({ id: SNAPSHOT_ID, payload, fetchedAt: now })
+    .onConflictDoUpdate({ target: checksSnapshot.id, set: { payload, fetchedAt: now } });
 }
 
 // The row is shared by every deployment on this database, so just after a deploy it still names the commit the
@@ -384,6 +390,8 @@ function forThisDeployment(snapshot: ChecksSnapshot): ChecksSnapshot {
  * pg_try_advisory_xact_lock: the instance that gets it refreshes and stores the result, stamped with `now`; an
  * instance that does not serves the stored row. When the refresh throws, the last good read is served and stored
  * with stale: true and its original fetchedAt, and the try still counts, so GitHub is not asked again for 15 minutes.
+ * With no good read yet, a failed refresh stores a placeholder stamped with `now`, which paces the next try the same
+ * way and is never served.
  * Throws when there has never been a good read, or when the database fails.
  */
 export async function readSnapshot(
@@ -392,7 +400,10 @@ export async function readSnapshot(
   refresh: () => Promise<ChecksSnapshot>,
 ): Promise<ChecksSnapshot> {
   const stored = await loadStored(db);
-  if (stored !== null && isFresh(stored.triedAt, now)) return forThisDeployment(stored.snapshot);
+  if (stored !== null && isFresh(stored.triedAt, now)) {
+    if (stored.snapshot === null) throw new Error("checks: no good read yet");
+    return forThisDeployment(stored.snapshot);
+  }
 
   const refreshed = await db.transaction(async (tx) => {
     // The lock ends with this transaction, so a refresh that crashes cannot hold it.
@@ -404,7 +415,10 @@ export async function readSnapshot(
     try {
       next = { ...(await refresh()), fetchedAt: now.toISOString(), stale: false };
     } catch {
-      if (current === null) return null;
+      if (current === null || current.snapshot === null) {
+        await saveSnapshot(tx, NO_GOOD_READ, now);
+        return null;
+      }
       next = { ...current.snapshot, stale: true };
     }
     await saveSnapshot(tx, next, now);

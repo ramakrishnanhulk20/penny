@@ -114,9 +114,12 @@ export type RemoveMemberResponse = { group: GroupView };
 export type ChangeBaseCurrencyRequest = { baseCurrency: string };
 export type ChangeBaseCurrencyResponse = { group: GroupView };
 
-/** Always the empty object: the header names the group and the server makes the new token. */
-export type ResetLinkRequest = Record<string, never>;
-/** The new link token, sent in this response and nowhere else. */
-export type ResetLinkResponse = { token: string; group: GroupView };
+/**
+ * The header names the group; newToken is the next link token, made and kept by the browser before it sends this, so
+ * an answer lost on the way back cannot lose the only copy of the new link.
+ */
+export type ResetLinkRequest = { newToken: string };
+/** The group under its new link. No token comes back: the browser already holds it. */
+export type ResetLinkResponse = { group: GroupView };
 
 export type ApiError = { error: { code: string } };

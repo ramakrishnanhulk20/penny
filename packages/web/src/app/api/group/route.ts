@@ -34,7 +34,7 @@ export async function GET(request: Request): Promise<Response> {
  * Changes the base currency of the group named by the x-penny-group header. Body: { baseCurrency }, nothing else.
  * 200 { group }, and the same 200 with nothing written when the group already has that base.
  * 400 invalid_body or bad_currency. 404 not_found for an unknown token. 409 base_locked once the group has had any
- * expense or payment, deleted ones included.
+ * expense or payment, deleted ones included; 409 limit_reached once the group holds MAX_EVENTS events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
  * Any other failure is a bare 500.

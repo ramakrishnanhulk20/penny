@@ -111,6 +111,7 @@ describe("adding a member", () => {
   it.each([
     ["bad_member_name", "a 41 character name", { name: "m".repeat(41) }],
     ["bad_member_name", "an empty name", { name: "   " }],
+    ["bad_member_name", "a lone surrogate, which JSON carries as an escape", { name: "Dev\ud800" }],
     ["bad_member_name", "a zero-width joiner", { name: "B‍en" }],
     ["invalid_body", "an unknown field", { name: "Dev", position: 0 }],
     ["invalid_body", "a missing name", {}],

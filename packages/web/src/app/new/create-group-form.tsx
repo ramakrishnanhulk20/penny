@@ -35,7 +35,7 @@ function checkForm(name: string, rows: readonly MemberRow[]) {
     const value = cleanText(row.value);
     if (value === "") continue;
     names.push(value);
-    if (value.length > MEMBER_NAME_MAX) {
+    if (isTooLong(value, MEMBER_NAME_MAX)) {
       rowCodes.set(row.key, "bad_member_name");
       continue;
     }

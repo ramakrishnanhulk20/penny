@@ -15,6 +15,10 @@ const FX_PATH = "/v1/latest";
 const CALL_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const CACHE_FOR_MS = 12 * 60 * 60 * 1000;
+const NO_RATE_FOR_MS = 60 * 60 * 1000;
+// Stored in the rate column when frankfurter gave no rate, so a pair the ECB does not publish costs at most one upstream
+// call an hour however often it is asked for. parseRate refuses it, so it can never be served as a rate.
+const NO_RATE = "";
 // The ECB published its first euro reference rates on this day, so no genuine rate is older.
 const FIRST_RATE_DATE = "1999-01-04";
 // [0-9] is ASCII only in a JavaScript regex without the u flag, so full-width digits are refused.
@@ -125,9 +129,9 @@ export async function fetchRate(fetchImpl: typeof fetch, from: Currency, to: Cur
 }
 
 // A row stamped in the future (a server with a fast clock) counts as expired, so a bad clock cannot pin a rate.
-function isFresh(fetchedAt: Date, now: Date): boolean {
+function isFresh(fetchedAt: Date, now: Date, forMs: number): boolean {
   const age = now.getTime() - fetchedAt.getTime();
-  return age >= 0 && age < CACHE_FOR_MS;
+  return age >= 0 && age < forMs;
 }
 
 // A stored row is read back as untrusted and passes the same rate and date checks as a fresh answer.
@@ -140,8 +144,9 @@ function storedRate(rate: string, date: string): FxRate | null {
 /**
  * The ECB reference rate from `from` to `to`, shared by every instance through the fx_cache table: a pair fetched
  * less than 12 hours before `now` is served from the table without calling frankfurter; otherwise fetchRate runs
- * and a good answer is stored, stamped with `now`. A failed fetch is not stored and gives null. The same currency on
- * both sides gives null. Throws only when the database fails.
+ * and its answer is stored, stamped with `now`. A failed fetch gives null and is stored as "no rate", so for the next
+ * hour the pair gives null without calling frankfurter. The same currency on both sides gives null. Throws only when
+ * the database fails.
  */
 export async function referenceRate(
   db: Db,
@@ -153,16 +158,18 @@ export async function referenceRate(
   if (from.code === to.code) return null;
   const pair = `${from.code}:${to.code}`;
   const [row] = await db.select().from(fxCache).where(eq(fxCache.pair, pair)).limit(1);
-  if (row !== undefined && isFresh(row.fetchedAt, now)) {
+  if (row !== undefined && row.rate === NO_RATE && isFresh(row.fetchedAt, now, NO_RATE_FOR_MS)) return null;
+  if (row !== undefined && row.rate !== NO_RATE && isFresh(row.fetchedAt, now, CACHE_FOR_MS)) {
     const cached = storedRate(row.rate, row.rateDate);
     if (cached !== null) return cached;
   }
   const fetched = await fetchRate(fetchImpl, from, to);
-  if (fetched === null) return null;
+  // The date column needs a day; for "no rate" it is the day of the try, and it is never read back.
+  const stored = fetched ?? { rate: NO_RATE, date: now.toISOString().slice(0, 10) };
   await db
     .insert(fxCache)
-    .values({ pair, rate: fetched.rate, rateDate: fetched.date, fetchedAt: now })
-    .onConflictDoUpdate({ target: fxCache.pair, set: { rate: fetched.rate, rateDate: fetched.date, fetchedAt: now } });
+    .values({ pair, rate: stored.rate, rateDate: stored.date, fetchedAt: now })
+    .onConflictDoUpdate({ target: fxCache.pair, set: { rate: stored.rate, rateDate: stored.date, fetchedAt: now } });
   return fetched;
 }
 

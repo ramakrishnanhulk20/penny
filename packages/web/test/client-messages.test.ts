@@ -1,6 +1,16 @@
-// Not covered: which field each message sits under, its aria-describedby link and the focus move. Those need a browser.
+// Not covered: which field each message sits under, its aria-describedby link and the focus move; that the create form
+// and the payment buttons call the checks tested here; and the reload a stale answer starts. Those need a browser.
 import { describe, expect, it } from "vitest";
-import { FALLBACK_MESSAGE, messageFor } from "@/lib/client/messages";
+import { MEMBER_NAME_MAX as SERVER_MEMBER_NAME_MAX } from "@/lib/api-schemas";
+import {
+  ALREADY_CHANGED_MESSAGE,
+  FALLBACK_MESSAGE,
+  MEMBER_NAME_MAX,
+  isStaleAnswer,
+  isTooLong,
+  messageFor,
+} from "@/lib/client/messages";
+import { cleanName } from "@/lib/text";
 
 const expense = { currency: "USD", digits: 2, total: "100.00", base: "EUR" };
 
@@ -20,6 +30,7 @@ describe("messageFor", () => {
     ["converts_to_zero", "That amount is too small to convert."],
     ["split_empty", "Choose at least one person to split with."],
     ["stale_version", "This expense was changed by someone else. Reload to see the latest."],
+    ["limit_reached", "This group has reached its size limit."],
   ])("%s gives its exact string", (code, expected) => {
     expect(messageFor(code, expense)).toBe(expected);
   });
@@ -67,7 +78,6 @@ describe("messageFor", () => {
     "internal",
     "network",
     "client_id_conflict",
-    "limit_reached",
     "bad_currency",
     "split_bad_amount",
     "",
@@ -83,5 +93,37 @@ describe("messageFor", () => {
     expect(messageFor("amount_too_many_decimals", { currency: "USD" })).toBe(FALLBACK_MESSAGE);
     expect(messageFor("split_exact_sum_mismatch", { currency: "USD" })).toBe(FALLBACK_MESSAGE);
     expect(messageFor("rate_required")).toBe(FALLBACK_MESSAGE);
+  });
+});
+
+describe("member name length", () => {
+  it("counts an emoji as one character in the browser's check and in cleanName: 40 pass and 41 fail", () => {
+    const forty = "\u{1F600}".repeat(40);
+    const fortyOne = "\u{1F600}".repeat(41);
+    expect(MEMBER_NAME_MAX).toBe(SERVER_MEMBER_NAME_MAX);
+    // 80 UTF-16 units, which a check on .length would have refused.
+    expect(forty).toHaveLength(80);
+
+    expect(isTooLong(forty, MEMBER_NAME_MAX)).toBe(false);
+    expect(isTooLong(fortyOne, MEMBER_NAME_MAX)).toBe(true);
+    expect(cleanName(forty, SERVER_MEMBER_NAME_MAX)).toBe(forty);
+    expect(cleanName(fortyOne, SERVER_MEMBER_NAME_MAX)).toBeNull();
+  });
+});
+
+describe("a stale Mark as paid or Undo", () => {
+  it.each(["not_found", "client_id_conflict", "stale_version"])("treats %s as the page being behind", (code) => {
+    expect(isStaleAnswer(code)).toBe(true);
+  });
+
+  it.each(["limit_reached", "rate_limited", "self_payment", "network", "internal", ""])(
+    "does not treat %j as the page being behind",
+    (code) => {
+      expect(isStaleAnswer(code)).toBe(false);
+    },
+  );
+
+  it("says so in its exact words", () => {
+    expect(ALREADY_CHANGED_MESSAGE).toBe("This was already changed. Showing the latest.");
   });
 });

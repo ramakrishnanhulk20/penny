@@ -9,6 +9,7 @@ import type {
   EditExpenseRequest,
   ResetLinkRequest,
 } from "./api-types";
+import { parseGroupToken } from "./group-token";
 import { cleanName } from "./text";
 
 /** Bodies above this many bytes are refused before any parsing. */
@@ -115,7 +116,10 @@ export const changeBaseCurrencyBody = z.strictObject({
   baseCurrency: z.string(),
 }) satisfies z.ZodType<unknown, ChangeBaseCurrencyRequest>;
 
-export const resetLinkBody = z.strictObject({}) satisfies z.ZodType<unknown, ResetLinkRequest>;
+// The browser makes the next token, so it passes the one format check every link token passes before it is used.
+export const resetLinkBody = z.strictObject({
+  newToken: z.string().refine((raw) => parseGroupToken(raw) !== null),
+}) satisfies z.ZodType<unknown, ResetLinkRequest>;
 
 export type CreateGroupBody = z.output<typeof createGroupBody>;
 export type AddExpenseBody = z.output<typeof addExpenseBody>;

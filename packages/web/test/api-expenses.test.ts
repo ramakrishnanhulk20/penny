@@ -223,6 +223,7 @@ describe("request checks", () => {
     ["bad_currency", { currency: "XXX" }],
     ["bad_description", { description: "  " }],
     ["bad_description", { description: "d".repeat(81) }],
+    ["bad_description", { description: "Taxi\ud800" }],
     ["bad_description", { description: "Taxi‮" }],
     ["invalid_body", { clientId: "short" }],
     ["invalid_body", { clientId: "has space in it" }],

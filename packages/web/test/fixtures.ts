@@ -160,8 +160,9 @@ export function patchGroup(token: string, body: unknown): Promise<Response> {
   return changeGroupRoute(jsonRequest("/api/group", body, token, "PATCH"));
 }
 
-export function postResetLink(token: string, body: unknown = {}): Promise<Response> {
-  return resetLinkRoute(jsonRequest("/api/group/reset-link", body, token));
+/** POST /api/group/reset-link. A null token sends no header at all. */
+export function postResetLink(token: string | null, body: unknown): Promise<Response> {
+  return resetLinkRoute(jsonRequest("/api/group/reset-link", body, token ?? undefined));
 }
 
 /** Minor units of an amount the API wrote: formatAmount always writes every decimal, so dropping the point is exact. */

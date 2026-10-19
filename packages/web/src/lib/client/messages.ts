@@ -7,6 +7,18 @@ export const DESCRIPTION_MAX = 80;
 
 export const FALLBACK_MESSAGE = "Something went wrong. Try again.";
 
+/** Shown once the page has loaded the latest group after "Mark as paid" or "Undo" found it changed. */
+export const ALREADY_CHANGED_MESSAGE = "This was already changed. Showing the latest.";
+
+/**
+ * True for the answers that mean the page is behind the server: the 404 (the payment, or a member it names, is gone,
+ * or a retried payment was undone since) and the 409s that a newer state explains. "limit_reached" is a 409 too, but a
+ * full group is not a stale page, so it stays out.
+ */
+export function isStaleAnswer(code: string): boolean {
+  return code === "not_found" || code === "client_id_conflict" || code === "stale_version";
+}
+
 export type MessageContext = {
   /** The group name as typed. bad_name covers both an empty and a long name, and only the name tells them apart. */
   readonly groupName?: string;
@@ -85,6 +97,8 @@ export function messageFor(code: string, context: MessageContext = {}): string {
       return `Enter the rate to ${context.base}.`;
     case "stale_version":
       return "This expense was changed by someone else. Reload to see the latest.";
+    case "limit_reached":
+      return "This group has reached its size limit.";
     default:
       return code.startsWith("rate_") ? "Enter a rate like 0.92." : FALLBACK_MESSAGE;
   }

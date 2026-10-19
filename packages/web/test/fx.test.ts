@@ -146,6 +146,7 @@ describe("referenceRate", () => {
   const T0 = new Date("2026-10-19T12:00:00.000Z");
   const after = (ms: number) => new Date(T0.getTime() + ms);
   const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+  const ONE_HOUR = 60 * 60 * 1000;
 
   it("serves a pair from the table for 12 hours, then asks frankfurter again", async () => {
     const db = await createTestDb();
@@ -164,15 +165,21 @@ describe("referenceRate", () => {
     expect(row.fetchedAt).toEqual(after(TWELVE_HOURS));
   });
 
-  it("stores nothing for a failure, so the next request asks again", async () => {
+  it("remembers a failure as no rate for an hour, then asks frankfurter again", async () => {
     const db = await createTestDb();
+    const missing = fakeFrankfurter(answering("{}", 404));
 
-    expect(await referenceRate(db, fakeFrankfurter(answering("{}", 404)).fetchImpl, USD, EUR, T0)).toBeNull();
-    expect(await db.select().from(fxCache)).toEqual([]);
+    expect(await referenceRate(db, missing.fetchImpl, USD, EUR, T0)).toBeNull();
+    expect(await db.select().from(fxCache)).toEqual([{ pair: "USD:EUR", rate: "", rateDate: "2026-10-19", fetchedAt: T0 }]);
+    expect(await referenceRate(db, missing.fetchImpl, USD, EUR, after(ONE_HOUR - 1))).toBeNull();
+    expect(missing.calls).toHaveLength(1);
 
     const frankfurter = fakeFrankfurter(answering(GOOD));
-    expect(await referenceRate(db, frankfurter.fetchImpl, USD, EUR, after(1000))).toEqual(FOUND);
+    expect(await referenceRate(db, frankfurter.fetchImpl, USD, EUR, after(ONE_HOUR))).toEqual(FOUND);
     expect(frankfurter.calls).toHaveLength(1);
+    expect(await db.select().from(fxCache)).toEqual([
+      { pair: "USD:EUR", rate: "0.88865", rateDate: "2026-10-16", fetchedAt: after(ONE_HOUR) },
+    ]);
   });
 
   it("does not serve a stored row that fails the rate check, and keeps one pair from answering another", async () => {
@@ -218,6 +225,19 @@ describe("GET /api/fx", () => {
 
     expect(response.status).toBe(404);
     expect(await response.text()).toBe('{"error":{"code":"no_rate"}}');
+  });
+
+  it("asks frankfurter once about a pair it does not publish, however often it is looked up within the hour", async () => {
+    setDbForTests(await createTestDb());
+    const frankfurter = fakeFrankfurter(answering('{"message":"not found"}', 404));
+    vi.stubGlobal("fetch", frankfurter.fetchImpl);
+
+    for (let i = 0; i < 2; i += 1) {
+      const response = await GET(fxRequest("?from=USD&to=VND"));
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe('{"error":{"code":"no_rate"}}');
+    }
+    expect(frankfurter.calls.map((call) => call.url)).toEqual(["https://api.frankfurter.dev/v1/latest?from=USD&to=VND"]);
   });
 
   it.each([
