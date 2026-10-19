@@ -16,6 +16,7 @@ describe("messageFor", () => {
     ["base_too_large", "That amount is too large."],
     ["converts_to_zero", "That amount is too small to convert."],
     ["split_empty", "Choose at least one person to split with."],
+    ["stale_version", "This expense was changed by someone else. Reload to see the latest."],
   ])("%s gives its exact string", (code, expected) => {
     expect(messageFor(code, expense)).toBe(expected);
   });

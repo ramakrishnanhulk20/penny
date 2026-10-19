@@ -1,4 +1,4 @@
-// Not covered: editing and deleting expenses (not built yet), payments (test/api-payments.test.ts), rate limits, a removed member in a split, the
+// Not covered: editing and deleting (test/api-expense-edit.test.ts), payments (test/api-payments.test.ts), rate limits, a removed member in a split, the
 // reference-rate lookup, or the Neon driver (this runs on in-memory PGlite, where transactions never truly overlap).
 import { and, count, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";

@@ -1,6 +1,6 @@
 import { MAX_PARTS } from "@penny/core";
 import { z } from "zod";
-import type { AddExpenseRequest, AddPaymentRequest, CreateGroupRequest } from "./api-types";
+import type { AddExpenseRequest, AddPaymentRequest, CreateGroupRequest, EditExpenseRequest } from "./api-types";
 import { cleanName } from "./text";
 
 /** Bodies above this many bytes are refused before any parsing. */
@@ -10,6 +10,8 @@ export const MEMBER_NAME_MAX = 40;
 export const DESCRIPTION_MAX = 80;
 export const MIN_MEMBERS = 2;
 export const MAX_MEMBERS = 20;
+/** The largest version an expense can be at: the top of the Postgres integer column that stores it. */
+export const MAX_VERSION = 2_147_483_647;
 
 // Each limit below names its own error code, so the page can say which rule failed. Strings with no limit of their
 // own (amounts, rates, currency codes, member ids) are capped by MAX_BODY_BYTES and judged by @penny/core or by
@@ -76,6 +78,17 @@ export const addExpenseBody = z.strictObject({
   split: splitBody,
 }) satisfies z.ZodType<unknown, AddExpenseRequest>;
 
+// No clientId: the version the editor saw is what makes an edit safe to send twice.
+export const editExpenseBody = z.strictObject({
+  version: z.int().min(1).max(MAX_VERSION),
+  description: cleanText(DESCRIPTION_MAX, "bad_description"),
+  amount: z.string(),
+  currency: z.string(),
+  rate: z.string().nullable(),
+  paidBy: memberId,
+  split: splitBody,
+}) satisfies z.ZodType<unknown, EditExpenseRequest>;
+
 export const addPaymentBody = z.strictObject({
   clientId,
   from: memberId,
@@ -87,6 +100,7 @@ export const addPaymentBody = z.strictObject({
 
 export type CreateGroupBody = z.output<typeof createGroupBody>;
 export type AddExpenseBody = z.output<typeof addExpenseBody>;
+export type EditExpenseBody = z.output<typeof editExpenseBody>;
 export type AddPaymentBody = z.output<typeof addPaymentBody>;
 
 export type ParsedBody<T> = { ok: true; value: T } | { ok: false; code: string };

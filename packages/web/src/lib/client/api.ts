@@ -5,6 +5,8 @@ import type {
   AddPaymentResponse,
   CreateGroupRequest,
   CreateGroupResponse,
+  DeleteExpenseResponse,
+  EditExpenseRequest,
   GroupView,
   UndoPaymentResponse,
 } from "@/lib/api-types";
@@ -62,6 +64,35 @@ export function addExpense(token: string, request: AddExpenseRequest): Promise<A
     method: "POST",
     headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
     body: JSON.stringify(request),
+  });
+}
+
+/**
+ * PATCH /api/group/expenses/{id}. "stale_version" when someone changed the expense since `request.version`; sending
+ * the same edit again after a lost answer returns the edited expense instead.
+ */
+export function editExpense(
+  token: string,
+  expenseId: string,
+  request: EditExpenseRequest,
+): Promise<ApiResult<AddExpenseResponse>> {
+  // The id came from a server response, but it is still encoded so no value can change which path is called.
+  return send<AddExpenseResponse>(`/api/group/expenses/${encodeURIComponent(expenseId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
+    body: JSON.stringify(request),
+  });
+}
+
+/**
+ * DELETE /api/group/expenses/{id}?version=N. "stale_version" when someone changed the expense since `version`;
+ * deleting it again succeeds and changes nothing.
+ */
+export function deleteExpense(token: string, expenseId: string, version: number): Promise<ApiResult<DeleteExpenseResponse>> {
+  const query = new URLSearchParams({ version: String(version) });
+  return send<DeleteExpenseResponse>(`/api/group/expenses/${encodeURIComponent(expenseId)}?${query}`, {
+    method: "DELETE",
+    headers: { [GROUP_HEADER]: token },
   });
 }
 

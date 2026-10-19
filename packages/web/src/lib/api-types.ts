@@ -5,7 +5,13 @@ export type SplitMode = "equal" | "shares" | "exact";
 
 export type MemberView = { id: string; name: string };
 
-export type ExpensePartView = { memberId: string; amount: string; baseAmount: string };
+export type ExpensePartView = {
+  memberId: string;
+  amount: string;
+  baseAmount: string;
+  /** Splits by shares only: the whole-number share behind this part, so the edit form can show the split as entered. */
+  weight?: number;
+};
 
 export type ExpenseView = {
   id: string;
@@ -67,6 +73,18 @@ export type AddExpenseRequest = {
   split: SplitRequest;
 };
 export type AddExpenseResponse = { expense: ExpenseView; group: GroupView };
+
+/** The whole expense as it should be after the edit, and the version of it the editor saw. Answered with an AddExpenseResponse. */
+export type EditExpenseRequest = {
+  version: number;
+  description: string;
+  amount: string;
+  currency: string;
+  rate: string | null;
+  paidBy: string;
+  split: SplitRequest;
+};
+export type DeleteExpenseResponse = { group: GroupView };
 
 export type AddPaymentRequest = {
   clientId: string;
