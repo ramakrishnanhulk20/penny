@@ -1,0 +1,39 @@
+# Private planning and agent files: never published
+CLAUDE.md
+AGENTS.md
+INTAKE.md
+PLAN.md
+STATE.md
+DECISIONS.md
+AGENT-RETROS.md
+SPEC.md
+docs/RD-BRIEF.md
+docs/AUDIT-PACKET.md
+.claude/
+scratchpad/
+reference/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+.next/
+.next-verify/
+out/
+dist/
+coverage/
+reports/
+.stryker-tmp/
+*.tsbuildinfo
+next-env.d.ts
+
+# Platform and tools
+.vercel/
+.testsprite/
+.DS_Store
+Thumbs.db
+*.log
+*.pem

@@ -1,0 +1,17 @@
+{
+  "name": "penny",
+  "private": true,
+  "workspaces": [
+    "packages/core",
+    "packages/web"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "test": "npm run test -w @penny/core && npm run test -w @penny/web",
+    "typecheck": "npm run typecheck -w @penny/core && npm run typecheck -w @penny/web",
+    "lint": "npm run lint -w @penny/web",
+    "build": "npm run build -w @penny/web"
+  }
+}
