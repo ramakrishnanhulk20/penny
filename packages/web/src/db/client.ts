@@ -27,7 +27,13 @@ export async function withDb<T>(fn: (db: Db) => Promise<T>): Promise<T> {
   if (testDb) return fn(testDb);
 
   // Neon's WebSocket connections cannot outlive one serverless request, so the pool is per call.
-  const pool = new Pool({ connectionString: serverEnv().DATABASE_URL });
+  // Fail closed on a slow or stuck database (threat model C26): no request waits on it longer than these.
+  const pool = new Pool({
+    connectionString: serverEnv().DATABASE_URL,
+    connectionTimeoutMillis: 5_000,
+    statement_timeout: 10_000,
+    query_timeout: 15_000,
+  });
   // An idle connection dropping emits "error" on the pool; unhandled, that would crash the function.
   pool.on("error", () => {});
   try {
