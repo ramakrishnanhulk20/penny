@@ -10,6 +10,11 @@ export default function Home() {
           Start a group
         </Link>
       </div>
+      <p>
+        <Link href="/checks" data-testid="home-checks-link">
+          How Penny is tested
+        </Link>
+      </p>
     </main>
   );
 }
