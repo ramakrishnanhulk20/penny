@@ -157,6 +157,20 @@ export const events = pgTable("events", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+// One row shared by every server instance, so /checks costs GitHub one bounded refresh per window however many
+// instances run (threat model C21).
+export const checksSnapshot = pgTable(
+  "checks_snapshot",
+  {
+    id: smallint("id").primaryKey(),
+    payload: jsonb("payload").notNull(),
+    // When the row was last refreshed or last tried, which paces the next try. The time of the last good read from
+    // GitHub sits inside the payload, so a failed try can wait out its window without changing that time.
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [check("checks_snapshot_single_row", sql`${t.id} = 1`)],
+);
+
 export type GroupRow = typeof groups.$inferSelect;
 export type MemberRow = typeof members.$inferSelect;
 export type ExpenseRow = typeof expenses.$inferSelect;
