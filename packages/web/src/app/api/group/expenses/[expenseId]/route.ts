@@ -8,6 +8,7 @@ import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 import { resolveGroup } from "@/lib/groups";
 import { badRequest, json, notFound, serverError } from "@/lib/http";
 import { deleteExpense, editExpense, type Refusal } from "@/lib/ledger-store";
+import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
 
 // Checked before any query, because Postgres throws on a string it cannot read as a uuid. Covers the shape of the
 // id only; whether it is an expense of this group is the store's question.
@@ -40,12 +41,19 @@ function refused(refusal: Refusal): Response {
  * 400 with the codes adding an expense uses, or invalid_body for a body that is not exactly the edit shape.
  * 404 not_found, byte for byte the same, for an unknown token, an id that is not a uuid, an expense of another group,
  * a deleted expense, or any member id outside this group. 409 stale_version when the version is not the current one.
+ * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
+ * the group the token names; an unknown token is a 404 first.
  * Any other failure is a bare 500.
  */
 export async function PATCH(request: Request, { params }: Params): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
   await connection();
   try {
+    // Counted on a short connection of its own, so the body below is still read with no connection held.
+    const allowed = await withDb(async (db) =>
+      takeRateLimit(db, LIMITS.groupWritePerNetwork, await networkKey(db, clientNetwork(request.headers))),
+    );
+    if (!allowed) return tooMany();
     const { expenseId } = await params;
     if (!EXPENSE_ID.safeParse(expenseId).success) return notFound();
     // The body is read before a database connection is opened, so a slow sender cannot hold one.
@@ -54,6 +62,7 @@ export async function PATCH(request: Request, { params }: Params): Promise<Respo
     return await withDb(async (db) => {
       const group = await resolveGroup(db, request.headers.get(GROUP_TOKEN_HEADER));
       if (group === null) return notFound();
+      if (!(await takeRateLimit(db, LIMITS.groupWritePerGroup, group.id))) return tooMany();
 
       const edited = await editExpense(db, group, expenseId, body.value);
       if (!edited.ok) return refused(edited);
@@ -75,19 +84,25 @@ export async function PATCH(request: Request, { params }: Params): Promise<Respo
  * 200 { group } once deleted, and the same 200 with nothing written when it already was.
  * 400 invalid_body when ?version= is missing, repeated, or not a positive whole number written in plain digits.
  * 404 not_found, byte for byte the same, for an unknown token, an id that is not a uuid, or an expense of another
- * group. 409 stale_version when the version is not the live expense's current one. Any other failure is a bare 500.
+ * group. 409 stale_version when the version is not the live expense's current one.
+ * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
+ * the group the token names; an unknown token is a 404 first.
+ * Any other failure is a bare 500.
  */
 export async function DELETE(request: Request, { params }: Params): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
   await connection();
   try {
-    const { expenseId } = await params;
-    if (!EXPENSE_ID.safeParse(expenseId).success) return notFound();
-    const version = versionFrom(request);
-    if (version === null) return badRequest("invalid_body");
     return await withDb(async (db) => {
+      const network = await networkKey(db, clientNetwork(request.headers));
+      if (!(await takeRateLimit(db, LIMITS.groupWritePerNetwork, network))) return tooMany();
+      const { expenseId } = await params;
+      if (!EXPENSE_ID.safeParse(expenseId).success) return notFound();
+      const version = versionFrom(request);
+      if (version === null) return badRequest("invalid_body");
       const group = await resolveGroup(db, request.headers.get(GROUP_TOKEN_HEADER));
       if (group === null) return notFound();
+      if (!(await takeRateLimit(db, LIMITS.groupWritePerGroup, group.id))) return tooMany();
 
       const deleted = await deleteExpense(db, group, expenseId, version);
       if (!deleted.ok) return refused(deleted);

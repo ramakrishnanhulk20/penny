@@ -4,13 +4,13 @@
 // because PGlite runs a single session; Vercel setting its address headers (the tests set them by hand); and the
 // expense form in a browser.
 import { currency, type Currency } from "@penny/core";
-import { count, eq } from "drizzle-orm";
+import { count } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/fx/route";
 import { setDbForTests } from "@/db/client";
 import { fxCache, rateLimits } from "@/db/schema";
 import { createTestDb } from "@/db/testing";
-import { clientNetwork, fetchRate, referenceRate, takeRateLimit } from "@/lib/fx";
+import { fetchRate, referenceRate } from "@/lib/fx";
 
 // connection() only works inside a live Next request; here it only needs to let the handler continue.
 vi.mock("next/server", () => ({ connection: async () => undefined }));
@@ -189,50 +189,6 @@ describe("referenceRate", () => {
   });
 });
 
-describe("clientNetwork", () => {
-  it.each([
-    [{ "x-vercel-forwarded-for": "203.0.113.7, 198.51.100.1" }, "ip4:203.0.113.7"],
-    [{ "x-vercel-forwarded-for": "203.0.113.7", "x-real-ip": "198.51.100.1" }, "ip4:203.0.113.7"],
-    [{ "x-real-ip": "198.51.100.1" }, "ip4:198.51.100.1"],
-    [{ "x-vercel-forwarded-for": "2001:db8:aa:bb:1:2:3:4" }, "ip6:2001:db8:aa:bb::/64"],
-    [{ "x-vercel-forwarded-for": "2001:DB8:AA:BB::9" }, "ip6:2001:db8:aa:bb::/64"],
-    [{ "x-vercel-forwarded-for": "2001:db8::1" }, "ip6:2001:db8:0:0::/64"],
-    [{ "x-vercel-forwarded-for": "::ffff:203.0.113.7" }, "ip4:203.0.113.7"],
-    [{ "x-forwarded-for": "203.0.113.7" }, "unknown"],
-    [{ "x-vercel-forwarded-for": "not an address", "x-real-ip": "198.51.100.1" }, "unknown"],
-    [{ "x-vercel-forwarded-for": "01.2.3.4" }, "unknown"],
-    [{}, "unknown"],
-  ])("reads %j as %s", (headers, network) => {
-    expect(clientNetwork(new Headers(headers))).toBe(network);
-  });
-});
-
-describe("takeRateLimit", () => {
-  it("allows 60 requests in a window, refuses the 61st, and starts again in the next window", async () => {
-    const db = await createTestDb();
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-19T12:00:05.000Z"));
-
-    for (let i = 0; i < 60; i += 1) expect(await takeRateLimit(db, "fx", "ip4:203.0.113.7", 60, 60)).toBe(true);
-    expect(await takeRateLimit(db, "fx", "ip4:203.0.113.7", 60, 60)).toBe(false);
-    expect(await takeRateLimit(db, "fx", "ip4:198.51.100.1", 60, 60)).toBe(true);
-    expect(await takeRateLimit(db, "sample-trip", "ip4:203.0.113.7", 60, 60)).toBe(true);
-
-    vi.setSystemTime(new Date("2026-10-19T12:01:00.000Z"));
-    expect(await takeRateLimit(db, "fx", "ip4:203.0.113.7", 60, 60)).toBe(true);
-    const rows = await db.select().from(rateLimits).where(eq(rateLimits.key, "ip4:203.0.113.7"));
-    expect(rows.filter((row) => row.bucket === "fx")).toEqual([
-      { bucket: "fx", key: "ip4:203.0.113.7", windowStart: new Date("2026-10-19T12:01:00.000Z"), count: 1 },
-    ]);
-  });
-
-  it("refuses settings that are not positive whole numbers", async () => {
-    const db = await createTestDb();
-    await expect(takeRateLimit(db, "fx", "unknown", 0, 60)).rejects.toThrow();
-    await expect(takeRateLimit(db, "fx", "unknown", 60, 0.5)).rejects.toThrow();
-  });
-});
-
 describe("GET /api/fx", () => {
   it("answers the rate, its date and its source, and serves it from the table on the next request", async () => {
     setDbForTests(await createTestDb());
@@ -275,7 +231,7 @@ describe("GET /api/fx", () => {
     ["an extra parameter", "?from=USD&to=EUR&amount=100"],
     ["a code with a smuggled parameter", "?from=USD%26to%3DGBP&to=EUR"],
     ["a padded code", "?from=USD%20&to=EUR"],
-  ])("answers 400 invalid_body for %s, before any database or upstream work", async (_label, query) => {
+  ])("answers 400 invalid_body for %s, counted once against the limit and with no upstream call", async (_label, query) => {
     const db = await createTestDb();
     setDbForTests(db);
     const frankfurter = fakeFrankfurter(answering(GOOD));
@@ -286,7 +242,7 @@ describe("GET /api/fx", () => {
     expect(response.status).toBe(400);
     expect(await response.text()).toBe('{"error":{"code":"invalid_body"}}');
     expect(frankfurter.calls).toEqual([]);
-    expect(await db.select({ n: count() }).from(rateLimits)).toEqual([{ n: 0 }]);
+    expect(await db.select({ n: count() }).from(rateLimits)).toEqual([{ n: 1 }]);
   });
 
   it("answers 429 rate_limited to the 61st request from one network in a minute, and again in the next minute", async () => {

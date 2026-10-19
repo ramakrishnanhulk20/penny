@@ -7,25 +7,34 @@ import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 import { resolveGroup } from "@/lib/groups";
 import { badRequest, json, notFound, serverError } from "@/lib/http";
 import { addMember } from "@/lib/ledger-store";
+import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
 
 /**
  * Adds a member to the group named by the x-penny-group header. Body: { name }, nothing else.
  * 201 { member, group }.
  * 400 invalid_body, bad_member_name (empty, over 40 characters, or holding a control or format character) or
  * duplicate_member_name (a current member has the same name, letter case and Unicode form ignored).
- * 404 not_found for an unknown token. 409 too_many_members once the group has 20 members. Any other failure is a
- * bare 500.
+ * 404 not_found for an unknown token. 409 too_many_members once the group has 20 members.
+ * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
+ * the group the token names; an unknown token is a 404 first.
+ * Any other failure is a bare 500.
  */
 export async function POST(request: Request): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
   await connection();
   try {
+    // Counted on a short connection of its own, so the body below is still read with no connection held.
+    const allowed = await withDb(async (db) =>
+      takeRateLimit(db, LIMITS.groupWritePerNetwork, await networkKey(db, clientNetwork(request.headers))),
+    );
+    if (!allowed) return tooMany();
     // The body is read before a database connection is opened, so a slow sender cannot hold one.
     const body = await parseBody(request, addMemberBody);
     if (!body.ok) return badRequest(body.code);
     return await withDb(async (db) => {
       const group = await resolveGroup(db, request.headers.get(GROUP_TOKEN_HEADER));
       if (group === null) return notFound();
+      if (!(await takeRateLimit(db, LIMITS.groupWritePerGroup, group.id))) return tooMany();
 
       const added = await addMember(db, group, body.value);
       if (!added.ok) {

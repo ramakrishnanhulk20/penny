@@ -3,6 +3,7 @@ import {
   bigint,
   char,
   check,
+  customType,
   date,
   foreignKey,
   integer,
@@ -17,9 +18,17 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+// drizzle-orm 0.45 has no bytea column of its own.
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType() {
+    return "bytea";
+  },
+});
+
 export const groups = pgTable("groups", {
   id: uuid("id").primaryKey().defaultRandom(),
-  // Only the sha256 of the link token is stored, so a copy of the database holds no working link.
+  // Only the sha256 of the link token is stored, so a copy of the database holds no working link. The constraint
+  // groups_token_hash_format (64 lowercase hex characters) is hand-written in migration 0003, outside this file.
   tokenHash: text("token_hash").notNull().unique("groups_token_hash_unique"),
   name: text("name").notNull(),
   baseCurrency: char("base_currency", { length: 3 }).notNull(),
@@ -146,6 +155,7 @@ export const payments = pgTable(
   ],
 );
 
+// Append-only: triggers hand-written in migration 0003, outside this file, refuse every UPDATE, DELETE and TRUNCATE.
 export const events = pgTable("events", {
   // Event order is this database sequence, never a clock: two servers can disagree on the time.
   seq: bigint("seq", { mode: "bigint" }).primaryKey().generatedAlwaysAsIdentity(),
@@ -181,8 +191,9 @@ export const fxCache = pgTable("fx_cache", {
   fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
 });
 
-// One fixed-window counter per bucket, client network and window. A row in Postgres rather than memory, so the limit
-// holds across every serverless instance (threat model C26).
+// One fixed-window counter per bucket, key and window. A row in Postgres rather than memory, so the limit holds across
+// every serverless instance (threat model C26). The key is a group id or an HMAC of the client network, never an
+// address.
 export const rateLimits = pgTable(
   "rate_limits",
   {
@@ -192,6 +203,17 @@ export const rateLimits = pgTable(
     count: integer("count").notNull(),
   },
   (t) => [primaryKey({ name: "rate_limits_pk", columns: [t.bucket, t.key, t.windowStart] })],
+);
+
+// The secret the rate limiter hashes client networks with. One row, made with 32 random bytes by the first instance
+// that needs it, so no address in rate_limits can be read back without it.
+export const serverKeys = pgTable(
+  "server_keys",
+  {
+    id: smallint("id").primaryKey(),
+    hmacKey: bytea("hmac_key").notNull(),
+  },
+  (t) => [check("server_keys_single_row", sql`${t.id} = 1`)],
 );
 
 export type GroupRow = typeof groups.$inferSelect;

@@ -1,5 +1,5 @@
 // Not covered: writers racing each other, link resets (they move no money; api-reset-link.test.ts has them), or the
-// database role that should forbid changing events (a deploy setting, not code).
+// refusal to change or delete events (database triggers, tested in hardening.test.ts).
 import {
   balances,
   currency,

@@ -373,13 +373,13 @@ describe("GET /api/checks", () => {
       throw new Error("connect ETIMEDOUT api.github.com with github_pat_secret");
     });
 
-    const down = await GET();
+    const down = await GET(new Request("http://localhost/api/checks"));
     expect(down.status).toBe(503);
     expect(await down.text()).toBe('{"error":{"code":"unavailable"}}');
     expect(down.headers.get("Cache-Control")).toBe("no-store");
 
     vi.stubGlobal("fetch", fakeGitHub(threePulls()).fetchImpl);
-    const up = await GET();
+    const up = await GET(new Request("http://localhost/api/checks"));
     expect(up.status).toBe(200);
     const body = (await up.json()) as ChecksSnapshot;
     expect(body.prs.map((pr) => [pr.number, pr.state, pr.verdict])).toEqual([
