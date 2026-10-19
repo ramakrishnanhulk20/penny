@@ -18,13 +18,25 @@ import type {
 } from "@/lib/api-types";
 import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 
+let addressesHandedOut = 0;
+
+/**
+ * A new client address from 198.18.0.0/15, the range set aside for network benchmark tests, on every call. Each
+ * request then counts against its own network, so a test file's volume never adds up the way one real client's would.
+ */
+export function freshAddress(): string {
+  addressesHandedOut += 1;
+  const n = addressesHandedOut % 0x20000;
+  return `198.${18 + (n >> 16)}.${(n >> 8) & 0xff}.${n & 0xff}`;
+}
+
 export function groupBody(overrides: Partial<CreateGroupRequest> = {}): CreateGroupRequest {
   return { name: "Lisbon trip", baseCurrency: "EUR", members: ["Ana", "Ben", "Chen"], ...overrides };
 }
 
 /** A request with a JSON body, POST unless told otherwise. A string body is sent as it is, so tests can send broken JSON. */
 export function jsonRequest(path: string, body: unknown, token?: string, method = "POST"): Request {
-  const headers = new Headers({ "content-type": "application/json" });
+  const headers = new Headers({ "content-type": "application/json", "x-vercel-forwarded-for": freshAddress() });
   if (token !== undefined) headers.set(GROUP_TOKEN_HEADER, token);
   return new Request(`http://localhost${path}`, {
     method,
@@ -44,7 +56,7 @@ export async function startGroup(overrides: Partial<CreateGroupRequest> = {}): P
 }
 
 export function getGroup(token: string | null): Promise<Response> {
-  const headers = new Headers();
+  const headers = new Headers({ "x-vercel-forwarded-for": freshAddress() });
   if (token !== null) headers.set(GROUP_TOKEN_HEADER, token);
   return getGroupRoute(new Request("http://localhost/api/group", { headers }));
 }
@@ -90,7 +102,7 @@ export function patchExpense(token: string | null, expenseId: string, body: unkn
  * version goes into the query as it is, so tests can send malformed ones; null sends no query at all.
  */
 export function deleteExpense(token: string | null, expenseId: string, version: number | string | null): Promise<Response> {
-  const headers = new Headers();
+  const headers = new Headers({ "x-vercel-forwarded-for": freshAddress() });
   if (token !== null) headers.set(GROUP_TOKEN_HEADER, token);
   const query = version === null ? "" : `?version=${version}`;
   const request = new Request(`http://localhost/api/group/expenses/${encodeURIComponent(expenseId)}${query}`, {
@@ -119,7 +131,7 @@ export function postPayment(token: string, body: unknown): Promise<Response> {
 
 /** DELETE /api/group/payments/{paymentId}, with the params Next.js would pass for that path. */
 export function deletePayment(token: string | null, paymentId: string): Promise<Response> {
-  const headers = new Headers();
+  const headers = new Headers({ "x-vercel-forwarded-for": freshAddress() });
   if (token !== null) headers.set(GROUP_TOKEN_HEADER, token);
   const request = new Request(`http://localhost/api/group/payments/${encodeURIComponent(paymentId)}`, {
     method: "DELETE",
@@ -134,7 +146,7 @@ export function postMember(token: string, body: unknown): Promise<Response> {
 
 /** DELETE /api/group/members/{memberId}, with the params Next.js would pass for that path. */
 export function deleteMember(token: string | null, memberId: string): Promise<Response> {
-  const headers = new Headers();
+  const headers = new Headers({ "x-vercel-forwarded-for": freshAddress() });
   if (token !== null) headers.set(GROUP_TOKEN_HEADER, token);
   const request = new Request(`http://localhost/api/group/members/${encodeURIComponent(memberId)}`, {
     method: "DELETE",

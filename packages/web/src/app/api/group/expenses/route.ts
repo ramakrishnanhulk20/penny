@@ -7,24 +7,34 @@ import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 import { resolveGroup } from "@/lib/groups";
 import { badRequest, json, notFound, serverError } from "@/lib/http";
 import { addExpense } from "@/lib/ledger-store";
+import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
 
 /**
  * Adds an expense to the group named by the x-penny-group header.
  * 201 { expense, group } for a new expense. 200 with the original when the same clientId arrives again with the
  * same body; nothing is written.
  * 400 with a code from the API contract. 404 not_found for an unknown token or any member id outside this group.
- * 409 client_id_conflict (same clientId, different body) or limit_reached. Any other failure is a bare 500.
+ * 409 client_id_conflict (same clientId, different body) or limit_reached.
+ * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
+ * the group the token names; an unknown token is a 404 first.
+ * Any other failure is a bare 500.
  */
 export async function POST(request: Request): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
   await connection();
   try {
+    // Counted on a short connection of its own, so the body below is still read with no connection held.
+    const allowed = await withDb(async (db) =>
+      takeRateLimit(db, LIMITS.groupWritePerNetwork, await networkKey(db, clientNetwork(request.headers))),
+    );
+    if (!allowed) return tooMany();
     // The body is read before a database connection is opened, so a slow sender cannot hold one.
     const body = await parseBody(request, addExpenseBody);
     if (!body.ok) return badRequest(body.code);
     return await withDb(async (db) => {
       const group = await resolveGroup(db, request.headers.get(GROUP_TOKEN_HEADER));
       if (group === null) return notFound();
+      if (!(await takeRateLimit(db, LIMITS.groupWritePerGroup, group.id))) return tooMany();
 
       const added = await addExpense(db, group, body.value);
       if (!added.ok) {

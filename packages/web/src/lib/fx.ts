@@ -1,8 +1,7 @@
-import { isIP } from "node:net";
 import { currency, formatRate, parseRate, type Currency } from "@penny/core";
-import { and, eq, lt, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Db } from "@/db/client";
-import { fxCache, rateLimits } from "@/db/schema";
+import { fxCache } from "@/db/schema";
 
 export type FxRate = { readonly rate: string; readonly date: string };
 
@@ -20,7 +19,6 @@ const CACHE_FOR_MS = 12 * 60 * 60 * 1000;
 const FIRST_RATE_DATE = "1999-01-04";
 // [0-9] is ASCII only in a JavaScript regex without the u flag, so full-width digits are refused.
 const DATE_FORMAT = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
-const UNKNOWN_NETWORK = "unknown";
 
 function isRateDate(text: string): boolean {
   if (!DATE_FORMAT.test(text) || text < FIRST_RATE_DATE) return false;
@@ -179,80 +177,4 @@ export function readPair(params: URLSearchParams): { from: Currency; to: Currenc
   const to = currency(params.get("to") ?? "");
   if (from === null || to === null || from.code === to.code) return null;
   return { from, to };
-}
-
-// Eight 16-bit groups, read through the WHATWG URL parser so every spelling of one address gives the same groups.
-// Zone ids and anything the parser refuses give null.
-function ipv6Groups(address: string): number[] | null {
-  let host: string;
-  try {
-    host = new URL(`http://[${address}]/`).hostname;
-  } catch {
-    return null;
-  }
-  const inner = host.slice(1, -1);
-  const [head, tail] = inner.includes("::") ? inner.split("::") : [inner, null];
-  const left = head === "" ? [] : head.split(":");
-  const right = tail === null || tail === "" ? [] : tail.split(":");
-  const filled = tail === null ? [] : Array<string>(8 - left.length - right.length).fill("0");
-  const groups = [...left, ...filled, ...right].map((part) => Number.parseInt(part, 16));
-  return groups.length === 8 && groups.every((part) => part >= 0 && part <= 0xffff) ? groups : null;
-}
-
-/**
- * The client network a request counts against, from the address the platform supplies: the first value of
- * x-vercel-forwarded-for, else x-real-ip. Vercel sets both itself and overwrites what a client sends. An IPv4 address
- * is its own network; an IPv6 address counts as its /64, since one subscriber is usually handed a whole /64; an
- * IPv4-mapped IPv6 address counts as the IPv4 address. A missing or unreadable address puts the request in one
- * shared "unknown" network, so leaving the header out never escapes the limit.
- */
-export function clientNetwork(headers: Headers): string {
-  const forwarded = headers.get("x-vercel-forwarded-for");
-  const address = (forwarded === null ? (headers.get("x-real-ip") ?? "") : forwarded.split(",")[0]).trim();
-  const family = isIP(address);
-  if (family === 4) return `ip4:${address}`;
-  if (family !== 6) return UNKNOWN_NETWORK;
-  const groups = ipv6Groups(address);
-  if (groups === null) return UNKNOWN_NETWORK;
-  if (groups.slice(0, 5).every((part) => part === 0) && groups[5] === 0xffff) {
-    return `ip4:${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
-  }
-  return `ip6:${groups
-    .slice(0, 4)
-    .map((part) => part.toString(16))
-    .join(":")}::/64`;
-}
-
-/**
- * Counts one request from `key` in `bucket` and says whether it is within `limit` requests for the current fixed
- * window of `windowSeconds`, counted from the Unix epoch. The count is one atomic upsert on a rate_limits row, so it
- * holds across every instance and concurrent requests cannot both take the last place. Requests over the limit are
- * still counted. Rows of this key's earlier windows in the bucket are deleted, so a client keeps at most one row.
- * Returns true when the request may go ahead. Throws when the database fails or limit or windowSeconds is not a
- * positive whole number.
- */
-export async function takeRateLimit(
-  db: Db,
-  bucket: string,
-  key: string,
-  limit: number,
-  windowSeconds: number,
-): Promise<boolean> {
-  if (!Number.isInteger(limit) || limit < 1 || !Number.isInteger(windowSeconds) || windowSeconds < 1) {
-    throw new Error("rate limit: bad settings");
-  }
-  const windowMs = windowSeconds * 1000;
-  const windowStart = new Date(Math.floor(Date.now() / windowMs) * windowMs);
-  const [row] = await db
-    .insert(rateLimits)
-    .values({ bucket, key, windowStart, count: 1 })
-    .onConflictDoUpdate({
-      target: [rateLimits.bucket, rateLimits.key, rateLimits.windowStart],
-      set: { count: sql`${rateLimits.count} + 1` },
-    })
-    .returning({ count: rateLimits.count });
-  await db
-    .delete(rateLimits)
-    .where(and(eq(rateLimits.bucket, bucket), eq(rateLimits.key, key), lt(rateLimits.windowStart, windowStart)));
-  return row !== undefined && row.count <= limit;
 }
