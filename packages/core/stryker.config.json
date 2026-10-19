@@ -1,0 +1,17 @@
+{
+  "$schema": "../../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "vitest": {
+    "configFile": "vitest.config.ts"
+  },
+  "checkers": ["typescript"],
+  "tsconfigFile": "tsconfig.json",
+  "mutate": ["src/**/*.ts", "!src/currencies.generated.ts", "!src/index.ts"],
+  "thresholds": {
+    "high": 95,
+    "low": 90,
+    "break": 85
+  },
+  "reporters": ["clear-text", "progress"],
+  "tempDirName": ".stryker-tmp"
+}
