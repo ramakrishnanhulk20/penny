@@ -1,7 +1,7 @@
 "use client";
 
 import { MAX_WEIGHT, allocate, formatAmount, parseAmount, type Currency, type Split } from "@penny/core";
-import type { MemberView, SplitMode, SplitRequest } from "@/lib/api-types";
+import type { ExpenseView, MemberView, SplitMode, SplitRequest } from "@/lib/api-types";
 import { FieldError } from "@/components/field-error";
 
 export type SplitDraft = {
@@ -30,6 +30,28 @@ const MODES: readonly (readonly [SplitMode, string])[] = [
 
 export function startingDraft(): SplitDraft {
   return { mode: "equal", unticked: new Set(), weights: new Map(), exact: new Map() };
+}
+
+/**
+ * The draft that shows an existing expense's split, for editing it. Members outside the split start unticked, and
+ * at a share of 0 when the split is by shares, so switching mode keeps the same people in.
+ */
+export function draftFor(expense: ExpenseView, members: readonly MemberView[]): SplitDraft {
+  const inSplit = new Map(expense.parts.map((part) => [part.memberId, part]));
+  const draft: SplitDraft = {
+    mode: expense.splitMode,
+    unticked: new Set(members.filter((member) => !inSplit.has(member.id)).map((member) => member.id)),
+    weights: new Map(),
+    exact: new Map(),
+  };
+  if (expense.splitMode === "shares") {
+    const weights = new Map(members.map((member) => [member.id, String(inSplit.get(member.id)?.weight ?? 0)]));
+    return { ...draft, weights };
+  }
+  if (expense.splitMode === "exact") {
+    return { ...draft, exact: new Map(expense.parts.map((part) => [part.memberId, part.amount])) };
+  }
+  return draft;
 }
 
 /** The same draft with every exact amount emptied. The mode, the ticks and the shares stay. */

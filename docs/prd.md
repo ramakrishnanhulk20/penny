@@ -77,8 +77,8 @@ Top: the group name, "Balances in <BASE>" (for example "Balances in EUR"), and t
 Any unexpected failure shows "Something went wrong. Try again." While the group loads the page shows "Loading the group...". "Copy link" confirms with "Link copied". The "You are:" selector starts on "Choose your name". In "Exact amounts" mode the live line reads "All assigned" once the amounts add up.
 
 **Expenses** list, newest first (empty: "No expenses yet."): description, "<amount> <CUR>", "paid by <Name>", and for a foreign currency also "= <base amount> <BASE> at <rate>". Each has "Edit" and "Delete".
-- "Edit" opens the same form filled in; "Save changes" updates it. If someone else changed it first: "This expense was changed by someone else. Reload to see the latest."
-- "Delete" asks "Delete this expense?" with "Delete" and "Cancel".
+- "Edit" fills the same form with that expense, under the heading "Edit expense", with the buttons "Save changes" and "Cancel". "Save changes" updates it. Once the change is saved, or after "Cancel", the form is back to "Add an expense", empty. If someone else changed it first: "This expense was changed by someone else. Reload to see the latest."
+- "Delete" asks "Delete this expense?" with "Delete" and "Cancel". If someone else changed it first, the same message shows and the expense stays.
 
 **Payments** list: "<From> paid <To> <amount> <BASE>", each with "Undo".
 

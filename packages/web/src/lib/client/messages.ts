@@ -76,6 +76,8 @@ export function messageFor(code: string, context: MessageContext = {}): string {
     case "rate_required":
       if (context.base === undefined) return FALLBACK_MESSAGE;
       return `Enter the rate to ${context.base}.`;
+    case "stale_version":
+      return "This expense was changed by someone else. Reload to see the latest.";
     default:
       return code.startsWith("rate_") ? "Enter a rate like 0.92." : FALLBACK_MESSAGE;
   }

@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { FieldError } from "@/components/field-error";
-import type { GroupView, TransferView } from "@/lib/api-types";
-import { addPayment, getGroup, undoPayment, type ApiResult } from "@/lib/client/api";
+import type { ExpenseView, GroupView, TransferView } from "@/lib/api-types";
+import { addPayment, deleteExpense, getGroup, undoPayment, type ApiResult } from "@/lib/client/api";
 import { FALLBACK_MESSAGE, messageFor } from "@/lib/client/messages";
 import { ExpenseForm } from "./expense-form";
 
@@ -157,6 +157,15 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
   const [paymentError, setPaymentError] = useState<string | undefined>(undefined);
   // A second press can land before React re-renders the disabled buttons, so the guard lives outside render.
   const paymentInFlight = useRef(false);
+  // The expense in the form, as it was shown when "Edit" was pressed. Its version is the one the save sends.
+  const [editing, setEditing] = useState<ExpenseView | null>(null);
+  // Part of the form's key: every Edit, Cancel and saved edit mounts a fresh form, filled or empty.
+  const [formRound, setFormRound] = useState(0);
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
+  const deleteInFlight = useRef(false);
+  const [rowError, setRowError] = useState<{ readonly expenseId: string; readonly message: string } | null>(null);
+  const rowErrorId = useId();
   const base = group.baseCurrency;
   const names = new Map(group.members.map((member) => [member.id, member.name]));
   const transfers = group.settlement.transfers;
@@ -197,6 +206,42 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
 
   function undo(paymentId: string) {
     void runPaymentAction(() => undoPayment(token, paymentId));
+  }
+
+  function startEdit(expense: ExpenseView) {
+    setEditing(expense);
+    setFormRound((round) => round + 1);
+    setConfirmingDelete(null);
+    setRowError(null);
+  }
+
+  function leaveEdit() {
+    setEditing(null);
+    setFormRound((round) => round + 1);
+  }
+
+  function askDelete(expenseId: string) {
+    setConfirmingDelete(expenseId);
+    setRowError(null);
+  }
+
+  // Sends the version this row shows, so a delete never removes an expense someone has changed since.
+  async function confirmDelete(expense: ExpenseView) {
+    if (deleteInFlight.current) return;
+    deleteInFlight.current = true;
+    setDeletePending(true);
+    setRowError(null);
+    const result = await deleteExpense(token, expense.id, expense.version);
+    deleteInFlight.current = false;
+    setDeletePending(false);
+    setConfirmingDelete(null);
+    if (!result.ok) {
+      setRowError({ expenseId: expense.id, message: messageFor(result.error) });
+      return;
+    }
+    // A form still holding the deleted expense could only ever save into a 404.
+    if (editing?.id === expense.id) leaveEdit();
+    onSaved(result.data.group);
   }
 
   return (
@@ -275,8 +320,16 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
       </section>
 
       <section>
-        <h2>Add an expense</h2>
-        <ExpenseForm key={group.id} token={token} group={group} you={you} onSaved={onSaved} />
+        <h2>{editing === null ? "Add an expense" : "Edit expense"}</h2>
+        <ExpenseForm
+          key={`${group.id}:${formRound}`}
+          token={token}
+          group={group}
+          you={you}
+          editing={editing}
+          onSaved={onSaved}
+          onEditDone={leaveEdit}
+        />
       </section>
 
       <section>
@@ -294,6 +347,39 @@ function GroupBoard({ ready, onYouChange, onSaved }: GroupBoardProps) {
                 {expense.currency !== base && expense.rate !== null && (
                   <div>{`= ${expense.baseAmount} ${base} at ${expense.rate}`}</div>
                 )}
+                <div className="inline">
+                  {confirmingDelete === expense.id ? (
+                    <>
+                      <span>Delete this expense?</span>
+                      <button
+                        type="button"
+                        disabled={deletePending}
+                        onClick={() => void confirmDelete(expense)}
+                        data-testid="expense-delete-confirm"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        disabled={deletePending}
+                        onClick={() => setConfirmingDelete(null)}
+                        data-testid="expense-delete-cancel"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => startEdit(expense)} data-testid="expense-edit">
+                        Edit
+                      </button>
+                      <button type="button" onClick={() => askDelete(expense.id)} data-testid="expense-delete">
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+                {rowError?.expenseId === expense.id && <FieldError id={rowErrorId} message={rowError.message} />}
               </li>
             ))}
           </ul>

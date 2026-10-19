@@ -15,14 +15,15 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { FieldError } from "@/components/field-error";
 import {
   SplitEditor,
+  draftFor,
   memberControlId,
   readSplit,
   startingDraft,
   withoutExactAmounts,
   type SplitDraft,
 } from "@/components/split-editor";
-import type { GroupView, MemberView, SplitRequest } from "@/lib/api-types";
-import { addExpense } from "@/lib/client/api";
+import type { ExpenseView, GroupView, MemberView, SplitRequest } from "@/lib/api-types";
+import { addExpense, editExpense } from "@/lib/client/api";
 import { DESCRIPTION_MAX, FALLBACK_MESSAGE, cleanText, isTooLong, messageFor, type MessageContext } from "@/lib/client/messages";
 
 const CURRENCY_CODES = listCurrencies().map((cur) => cur.code);
@@ -104,14 +105,20 @@ type ExpenseFormProps = {
   readonly group: GroupView;
   /** The member chosen under "You are:", or "" for none. */
   readonly you: string;
+  /** The expense to edit, exactly as it was shown when "Edit" was pressed, or null to add a new one. */
+  readonly editing: ExpenseView | null;
   readonly onSaved: (group: GroupView) => void;
+  /** Called by "Cancel" and after a saved edit. The parent mounts a fresh, empty form to add an expense. */
+  readonly onEditDone: () => void;
 };
 
 /**
- * The "Add an expense" form. One clientId is made when the form opens and kept until a save succeeds, so a
- * double press or a retry after a dropped connection sends the same clientId and the server stores one expense.
+ * The "Add an expense" form, which also edits an expense. One clientId is made when the form opens and kept until a
+ * save succeeds, so a double press or a retry after a dropped connection sends the same clientId and the server
+ * stores one expense. An edit sends the version it was shown instead, so the server refuses it once someone else has
+ * changed the expense, and recognises a resend of the same edit. Its values are read once, when the form mounts.
  */
-export function ExpenseForm({ token, group, you, onSaved }: ExpenseFormProps) {
+export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }: ExpenseFormProps) {
   const idPrefix = useId();
   const descriptionId = `${idPrefix}-description`;
   const amountId = `${idPrefix}-amount`;
@@ -124,15 +131,20 @@ export function ExpenseForm({ token, group, you, onSaved }: ExpenseFormProps) {
   const formErrorId = `${idPrefix}-form-error`;
 
   const [clientId, setClientId] = useState(() => crypto.randomUUID());
-  const [description, setDescription] = useState("");
-  const [amount, setAmount] = useState("");
-  const [currencyCode, setCurrencyCode] = useState(group.baseCurrency);
-  const [rate, setRate] = useState("");
-  const [paidByChoice, setPaidByChoice] = useState<string | null>(null);
-  const [draft, setDraft] = useState<SplitDraft>(startingDraft);
+  const [description, setDescription] = useState(editing?.description ?? "");
+  const [amount, setAmount] = useState(editing?.amount ?? "");
+  const [currencyCode, setCurrencyCode] = useState(editing?.currency ?? group.baseCurrency);
+  const [rate, setRate] = useState(editing?.rate ?? "");
+  const [paidByChoice, setPaidByChoice] = useState<string | null>(editing?.paidBy ?? null);
+  const [draft, setDraft] = useState<SplitDraft>(() =>
+    editing === null ? startingDraft() : draftFor(editing, group.members),
+  );
   const [errors, setErrors] = useState<FieldErrors>({});
   const [pending, setPending] = useState(false);
-  const [focusRequest, setFocusRequest] = useState<{ readonly id: string } | null>(null);
+  // "Edit" sits in the list below the form, so the filled form is brought into view by focusing its first field.
+  const [focusRequest, setFocusRequest] = useState<{ readonly id: string } | null>(
+    editing === null ? null : { id: descriptionId },
+  );
   // A second press can land before React re-renders the disabled button, so the guard lives outside render.
   const inFlight = useRef(false);
 
@@ -200,17 +212,26 @@ export function ExpenseForm({ token, group, you, onSaved }: ExpenseFormProps) {
     inFlight.current = true;
     setPending(true);
     setErrors({});
-    const result = await addExpense(token, {
-      clientId,
+    const fields = {
       description: cleanText(description),
       amount,
       currency: cur.code,
       rate: foreign ? rate : null,
       paidBy,
       split: checked.split,
-    });
+    };
+    const result =
+      editing === null
+        ? await addExpense(token, { clientId, ...fields })
+        : await editExpense(token, editing.id, { version: editing.version, ...fields });
     inFlight.current = false;
     setPending(false);
+
+    if (result.ok && editing !== null) {
+      onSaved(result.data.group);
+      onEditDone();
+      return;
+    }
 
     if (result.ok) {
       setDescription("");
@@ -342,10 +363,18 @@ export function ExpenseForm({ token, group, you, onSaved }: ExpenseFormProps) {
           type="submit"
           disabled={pending}
           aria-describedby={errors.form === undefined ? undefined : formErrorId}
-          data-testid="expense-submit"
+          data-testid={editing === null ? "expense-submit" : "expense-save"}
         >
-          Add expense
+          {editing === null ? "Add expense" : "Save changes"}
         </button>
+        {editing !== null && (
+          <>
+            {" "}
+            <button type="button" disabled={pending} onClick={onEditDone} data-testid="expense-edit-cancel">
+              Cancel
+            </button>
+          </>
+        )}
       </div>
       <FieldError id={formErrorId} message={errors.form} />
     </form>

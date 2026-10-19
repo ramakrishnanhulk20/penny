@@ -24,7 +24,7 @@ import {
   type GroupRow,
   type PaymentRow,
 } from "../db/schema";
-import type { AddExpenseBody, AddPaymentBody, CreateGroupBody } from "./api-schemas";
+import type { AddExpenseBody, AddPaymentBody, CreateGroupBody, EditExpenseBody } from "./api-schemas";
 import { mintGroupToken } from "./group-token";
 import { nameKey } from "./text";
 
@@ -72,6 +72,16 @@ export type PaymentAddedPayload = {
   rateScale: string | null;
 };
 
+/**
+ * The whole expense after an edit, in the shape of expense_added, plus the version the edit moved it to. clientId is
+ * the one the expense was added with. requestHash is the edit's own, so a retried edit can be recognised; the row
+ * keeps the hash of its add, so a retried add still finds its expense after an edit.
+ */
+export type ExpenseEditedPayload = ExpenseAddedPayload & { version: number };
+
+/** The row keeps all its data; its deleted_at is the created_at of this event, both set in one transaction. */
+export type ExpenseDeletedPayload = { expenseId: string };
+
 /** The row keeps all its data; its deleted_at is the created_at of this event, both set in one transaction. */
 export type PaymentDeletedPayload = { paymentId: string };
 
@@ -81,6 +91,7 @@ function refuse(status: Refusal["status"], code: string): Refusal {
 
 // The same answer an unknown token gets, so a foreign id cannot be told apart from a missing group (C1).
 const NOT_FOUND = refuse(404, "not_found");
+const STALE_VERSION = refuse(409, "stale_version");
 
 const AMOUNT_CODES: Record<AmountError, string> = {
   format: "amount_format",
@@ -184,9 +195,89 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function requestHash(input: AddExpenseBody | AddPaymentBody): string {
-  const withoutClientId = Object.fromEntries(Object.entries(input).filter(([key]) => key !== "clientId"));
-  return createHash("sha256").update(canonicalJson(withoutClientId), "utf8").digest("hex");
+// `key` is what marks the request rather than the expense or payment (the clientId of an add, the version of an
+// edit), so the hash covers only what gets stored.
+function requestHash(input: AddExpenseBody | AddPaymentBody | EditExpenseBody, key: "clientId" | "version"): string {
+  const stored = Object.fromEntries(Object.entries(input).filter(([name]) => name !== key));
+  return createHash("sha256").update(canonicalJson(stored), "utf8").digest("hex");
+}
+
+type ExpenseFields = Pick<AddExpenseBody, "description" | "amount" | "currency" | "rate" | "paidBy" | "split">;
+
+// The one set of checks for an add and an edit, so an edit can never store what an add would refuse. `positions`
+// holds this group's current members only, so a member of another group, or a removed one, gets the 404 an unknown
+// token gets.
+function checkedExpense(
+  id: string,
+  input: ExpenseFields,
+  base: Currency,
+  positions: ReadonlyMap<string, number>,
+): StoreResult<ExpenseEntry> {
+  const cur = currency(input.currency);
+  if (cur === null) return refuse(400, "bad_currency");
+  const amount = parseAmount(input.amount, cur);
+  if (!amount.ok) return refuse(400, AMOUNT_CODES[amount.error]);
+  let rate: Rate | null = null;
+  if (input.rate !== null) {
+    const parsed = parseRate(input.rate);
+    if (!parsed.ok) return refuse(400, `rate_${parsed.error}`);
+    rate = parsed.value;
+  }
+  const asked = requestSplit(input.split, cur);
+  if (!asked.ok) return asked;
+  if (![input.paidBy, ...splitMembers(asked.value)].every((memberId) => positions.has(memberId))) return NOT_FOUND;
+
+  const entry: ExpenseEntry = {
+    kind: "expense",
+    id,
+    paidBy: input.paidBy,
+    currency: cur,
+    amount: amount.value,
+    rate,
+    split: inPositionOrder(asked.value, positions),
+  };
+  const checked = entryInBase(entry, base, new Set(positions.keys()));
+  if (!checked.ok) return LEDGER_REFUSALS[checked.error];
+  return { ok: true, value: entry };
+}
+
+async function currentPositions(db: Db, groupId: string): Promise<Map<string, number>> {
+  const current = await db
+    .select({ id: members.id, position: members.position })
+    .from(members)
+    .where(and(eq(members.groupId, groupId), isNull(members.removedAt)));
+  return new Map(current.map((member) => [member.id, member.position]));
+}
+
+function expensePayload(entry: ExpenseEntry, clientId: string, hash: string, description: string): ExpenseAddedPayload {
+  return {
+    expenseId: entry.id,
+    clientId,
+    requestHash: hash,
+    description,
+    currency: entry.currency.code,
+    amountMinor: entry.amount.toString(),
+    rateUnits: entry.rate === null ? null : entry.rate.units.toString(),
+    rateScale: entry.rate === null ? null : String(entry.rate.scale),
+    paidBy: entry.paidBy,
+    splitMode: entry.split.mode,
+    parts: splitWeights(entry.split).map((part) => ({ memberId: part.memberId, weight: part.weight.toString() })),
+  };
+}
+
+// The request hash of the edit that moved the expense to `version`, or null when no edit did. The payload was written
+// by editExpense, but it is still read as untrusted: anything unexpected gives null, which refuses the retry.
+async function editHashAt(db: Db, groupId: string, expenseId: string, version: number): Promise<string | null> {
+  const [last] = await db
+    .select({ payload: events.payload })
+    .from(events)
+    .where(and(eq(events.groupId, groupId), eq(events.entityId, expenseId), eq(events.kind, "expense_edited")))
+    .orderBy(desc(events.seq))
+    .limit(1);
+  if (last === undefined || typeof last.payload !== "object" || last.payload === null) return null;
+  const payload = last.payload as Partial<ExpenseEditedPayload>;
+  if (payload.version !== version || typeof payload.requestHash !== "string") return null;
+  return payload.requestHash;
 }
 
 function answerRetry(earlier: ExpenseRow, hash: string): StoreResult<{ status: 200 | 201; expenseId: string }> {
@@ -361,7 +452,7 @@ export async function addExpense(
   input: AddExpenseBody,
 ): Promise<StoreResult<{ status: 200 | 201; expenseId: string }>> {
   const base = storedCurrency(group.baseCurrency);
-  const hash = requestHash(input);
+  const hash = requestHash(input, "clientId");
   try {
     return await db.transaction(async (tx) => {
       // Holding the group row serialises writes to one group, so the cap and the clientId check cannot race.
@@ -376,66 +467,27 @@ export async function addExpense(
         .where(and(eq(expenses.groupId, group.id), isNull(expenses.deletedAt)));
       if (live >= MAX_LIVE_EXPENSES) return refuse(409, "limit_reached");
 
-      const current = await tx
-        .select({ id: members.id, position: members.position })
-        .from(members)
-        .where(and(eq(members.groupId, group.id), isNull(members.removedAt)));
-      const positions = new Map(current.map((member) => [member.id, member.position]));
+      const checked = checkedExpense(randomUUID(), input, base, await currentPositions(tx, group.id));
+      if (!checked.ok) return checked;
+      const entry = checked.value;
 
-      const cur = currency(input.currency);
-      if (cur === null) return refuse(400, "bad_currency");
-      const amount = parseAmount(input.amount, cur);
-      if (!amount.ok) return refuse(400, AMOUNT_CODES[amount.error]);
-      let rate: Rate | null = null;
-      if (input.rate !== null) {
-        const parsed = parseRate(input.rate);
-        if (!parsed.ok) return refuse(400, `rate_${parsed.error}`);
-        rate = parsed.value;
-      }
-      const asked = requestSplit(input.split, cur);
-      if (!asked.ok) return asked;
-      if (![input.paidBy, ...splitMembers(asked.value)].every((memberId) => positions.has(memberId))) return NOT_FOUND;
-
-      const entry: ExpenseEntry = {
-        kind: "expense",
-        id: randomUUID(),
-        paidBy: input.paidBy,
-        currency: cur,
-        amount: amount.value,
-        rate,
-        split: inPositionOrder(asked.value, positions),
-      };
-      const checked = entryInBase(entry, base, new Set(positions.keys()));
-      if (!checked.ok) return LEDGER_REFUSALS[checked.error];
-
-      const weights = splitWeights(entry.split);
       await tx.insert(expenses).values({
         id: entry.id,
         groupId: group.id,
         clientId: input.clientId,
         requestHash: hash,
         description: input.description,
-        currency: cur.code,
+        currency: entry.currency.code,
         amountMinor: entry.amount,
-        rateUnits: rate?.units ?? null,
-        rateScale: rate?.scale ?? null,
+        rateUnits: entry.rate?.units ?? null,
+        rateScale: entry.rate?.scale ?? null,
         paidBy: entry.paidBy,
         splitMode: entry.split.mode,
       });
-      await tx.insert(expenseParts).values(weights.map((part) => ({ expenseId: entry.id, groupId: group.id, ...part })));
-      const payload: ExpenseAddedPayload = {
-        expenseId: entry.id,
-        clientId: input.clientId,
-        requestHash: hash,
-        description: input.description,
-        currency: cur.code,
-        amountMinor: entry.amount.toString(),
-        rateUnits: rate === null ? null : rate.units.toString(),
-        rateScale: rate === null ? null : String(rate.scale),
-        paidBy: entry.paidBy,
-        splitMode: entry.split.mode,
-        parts: weights.map((part) => ({ memberId: part.memberId, weight: part.weight.toString() })),
-      };
+      await tx
+        .insert(expenseParts)
+        .values(splitWeights(entry.split).map((part) => ({ expenseId: entry.id, groupId: group.id, ...part })));
+      const payload = expensePayload(entry, input.clientId, hash, input.description);
       await tx.insert(events).values({ groupId: group.id, kind: "expense_added", entityId: entry.id, payload });
       return { ok: true, value: { status: 201, expenseId: entry.id } };
     });
@@ -446,6 +498,131 @@ export async function addExpense(
     if (winner === null) throw error;
     return answerRetry(winner, hash);
   }
+}
+
+/**
+ * Replaces one live expense of `group` with `input`, but only from the version the editor saw.
+ * The new values are checked exactly as addExpense checks them. Then, in one transaction: the row takes the new
+ * values and moves its version on by one, its parts are replaced, an expense_edited event is written and the group's
+ * version moves on by one (`edited: true`).
+ * A retry of the edit that brought the expense to its current version (the expense is at input.version + 1 and that
+ * edit had the same request hash) succeeds again with `edited: false` and writes nothing.
+ * Precondition: `expenseId` is a uuid; the route checks it, since Postgres throws on anything else.
+ * Refuses: 404 "not_found" when no live expense with this id belongs to this group, or for any member id that is not
+ * a current member; 400 with the codes addExpense uses; 409 "stale_version" for any other version.
+ */
+export async function editExpense(
+  db: Db,
+  group: GroupRow,
+  expenseId: string,
+  input: EditExpenseBody,
+): Promise<StoreResult<{ expenseId: string; edited: boolean }>> {
+  const base = storedCurrency(group.baseCurrency);
+  const hash = requestHash(input, "version");
+  return db.transaction(async (tx) => {
+    // Under the group row lock the version read here is still the version when the update lands, and a retried edit
+    // cannot slip in between the version check and the write.
+    await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+
+    const [row] = await tx
+      .select({ id: expenses.id, clientId: expenses.clientId, version: expenses.version, deletedAt: expenses.deletedAt })
+      .from(expenses)
+      .where(and(eq(expenses.groupId, group.id), eq(expenses.id, expenseId)))
+      .limit(1);
+    if (row === undefined || row.deletedAt !== null) return NOT_FOUND;
+
+    // From here on the id is the one Postgres stored, so nothing written carries the caller's spelling of it.
+    const checked = checkedExpense(row.id, input, base, await currentPositions(tx, group.id));
+    if (!checked.ok) return checked;
+
+    if (row.version !== input.version) {
+      const retried =
+        row.version === input.version + 1 && (await editHashAt(tx, group.id, row.id, row.version)) === hash;
+      return retried ? { ok: true, value: { expenseId: row.id, edited: false } } : STALE_VERSION;
+    }
+
+    const entry = checked.value;
+    const version = row.version + 1;
+    // The version and deleted_at conditions repeat the checks above, so a lost update stays impossible even if the lock
+    // were ever removed.
+    const updated = await tx
+      .update(expenses)
+      .set({
+        description: input.description,
+        currency: entry.currency.code,
+        amountMinor: entry.amount,
+        rateUnits: entry.rate?.units ?? null,
+        rateScale: entry.rate?.scale ?? null,
+        paidBy: entry.paidBy,
+        splitMode: entry.split.mode,
+        version,
+      })
+      .where(
+        and(
+          eq(expenses.groupId, group.id),
+          eq(expenses.id, row.id),
+          eq(expenses.version, row.version),
+          isNull(expenses.deletedAt),
+        ),
+      )
+      .returning({ id: expenses.id });
+    if (updated.length !== 1) return STALE_VERSION;
+
+    await tx.delete(expenseParts).where(and(eq(expenseParts.groupId, group.id), eq(expenseParts.expenseId, row.id)));
+    await tx
+      .insert(expenseParts)
+      .values(splitWeights(entry.split).map((part) => ({ expenseId: row.id, groupId: group.id, ...part })));
+    const payload: ExpenseEditedPayload = { ...expensePayload(entry, row.clientId, hash, input.description), version };
+    await tx.insert(events).values({ groupId: group.id, kind: "expense_edited", entityId: row.id, payload });
+    await tx
+      .update(groups)
+      .set({ version: sql`${groups.version} + 1` })
+      .where(eq(groups.id, group.id));
+    return { ok: true, value: { expenseId: row.id, edited: true } };
+  });
+}
+
+/**
+ * Deletes one expense of `group`, but only from the version the deleter saw: the row keeps its data and gains
+ * deleted_at, an expense_deleted event is written and the group's version moves on by one, in one transaction
+ * (`deleted: true`). An expense that is already deleted succeeds again with `deleted: false`, whatever the version,
+ * and nothing is written.
+ * Precondition: `expenseId` is a uuid; the route checks it, since Postgres throws on anything else.
+ * Refuses: 404 "not_found" when no expense with this id belongs to this group; 409 "stale_version" when `version` is
+ * not the live expense's current version.
+ */
+export async function deleteExpense(
+  db: Db,
+  group: GroupRow,
+  expenseId: string,
+  version: number,
+): Promise<StoreResult<{ deleted: boolean }>> {
+  return db.transaction(async (tx) => {
+    // Under the group row lock two deletes of one expense run one after the other, so only the first one writes.
+    await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, group.id)).for("update");
+
+    const [row] = await tx
+      .select({ id: expenses.id, version: expenses.version, deletedAt: expenses.deletedAt })
+      .from(expenses)
+      .where(and(eq(expenses.groupId, group.id), eq(expenses.id, expenseId)))
+      .limit(1);
+    if (row === undefined) return NOT_FOUND;
+    if (row.deletedAt !== null) return { ok: true, value: { deleted: false } };
+    if (row.version !== version) return STALE_VERSION;
+
+    // now() is the transaction's start time, the same instant the event's created_at gets.
+    await tx
+      .update(expenses)
+      .set({ deletedAt: sql`now()` })
+      .where(and(eq(expenses.groupId, group.id), eq(expenses.id, row.id)));
+    const payload: ExpenseDeletedPayload = { expenseId: row.id };
+    await tx.insert(events).values({ groupId: group.id, kind: "expense_deleted", entityId: row.id, payload });
+    await tx
+      .update(groups)
+      .set({ version: sql`${groups.version} + 1` })
+      .where(eq(groups.id, group.id));
+    return { ok: true, value: { deleted: true } };
+  });
 }
 
 /**
@@ -464,7 +641,7 @@ export async function addPayment(
   input: AddPaymentBody,
 ): Promise<StoreResult<{ status: 200 | 201; paymentId: string }>> {
   const base = storedCurrency(group.baseCurrency);
-  const hash = requestHash(input);
+  const hash = requestHash(input, "clientId");
   try {
     return await db.transaction(async (tx) => {
       // The same group row lock as addExpense, so the cap and the clientId check cannot race.

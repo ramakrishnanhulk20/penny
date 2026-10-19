@@ -1,4 +1,5 @@
 import { expect } from "vitest";
+import { DELETE as deleteExpenseRoute, PATCH as editExpenseRoute } from "@/app/api/group/expenses/[expenseId]/route";
 import { POST as addExpenseRoute } from "@/app/api/group/expenses/route";
 import { DELETE as undoPaymentRoute } from "@/app/api/group/payments/[paymentId]/route";
 import { POST as addPaymentRoute } from "@/app/api/group/payments/route";
@@ -9,6 +10,7 @@ import type {
   AddPaymentRequest,
   CreateGroupRequest,
   CreateGroupResponse,
+  EditExpenseRequest,
   GroupView,
 } from "@/lib/api-types";
 import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
@@ -17,12 +19,12 @@ export function groupBody(overrides: Partial<CreateGroupRequest> = {}): CreateGr
   return { name: "Lisbon trip", baseCurrency: "EUR", members: ["Ana", "Ben", "Chen"], ...overrides };
 }
 
-/** A POST with a JSON body. A string body is sent as it is, so tests can send broken JSON. */
-export function jsonRequest(path: string, body: unknown, token?: string): Request {
+/** A request with a JSON body, POST unless told otherwise. A string body is sent as it is, so tests can send broken JSON. */
+export function jsonRequest(path: string, body: unknown, token?: string, method = "POST"): Request {
   const headers = new Headers({ "content-type": "application/json" });
   if (token !== undefined) headers.set(GROUP_TOKEN_HEADER, token);
   return new Request(`http://localhost${path}`, {
-    method: "POST",
+    method,
     headers,
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
@@ -66,6 +68,33 @@ export function expenseBody(group: GroupView, overrides: Partial<AddExpenseReque
 
 export function postExpense(token: string, body: unknown): Promise<Response> {
   return addExpenseRoute(jsonRequest("/api/group/expenses", body, token));
+}
+
+/** expenseBody's expense as an edit from `version`, with the overrides on top. */
+export function editBody(group: GroupView, version: number, overrides: Partial<EditExpenseRequest> = {}): EditExpenseRequest {
+  const { description, amount, currency, rate, paidBy, split } = expenseBody(group);
+  return { version, description, amount, currency, rate, paidBy, split, ...overrides };
+}
+
+/** PATCH /api/group/expenses/{expenseId}, with the params Next.js would pass for that path. */
+export function patchExpense(token: string | null, expenseId: string, body: unknown): Promise<Response> {
+  const request = jsonRequest(`/api/group/expenses/${encodeURIComponent(expenseId)}`, body, token ?? undefined, "PATCH");
+  return editExpenseRoute(request, { params: Promise.resolve({ expenseId }) });
+}
+
+/**
+ * DELETE /api/group/expenses/{expenseId}?version=..., with the params Next.js would pass for that path. A string
+ * version goes into the query as it is, so tests can send malformed ones; null sends no query at all.
+ */
+export function deleteExpense(token: string | null, expenseId: string, version: number | string | null): Promise<Response> {
+  const headers = new Headers();
+  if (token !== null) headers.set(GROUP_TOKEN_HEADER, token);
+  const query = version === null ? "" : `?version=${version}`;
+  const request = new Request(`http://localhost/api/group/expenses/${encodeURIComponent(expenseId)}${query}`, {
+    method: "DELETE",
+    headers,
+  });
+  return deleteExpenseRoute(request, { params: Promise.resolve({ expenseId }) });
 }
 
 /** A payment of 10 in the base currency from the second member to the first. */

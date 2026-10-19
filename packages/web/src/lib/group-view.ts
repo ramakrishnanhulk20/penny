@@ -22,6 +22,8 @@ function expenseView(item: LedgerExpense, base: Currency, known: ReadonlySet<str
   if (!own.ok || !inBase.ok) throw new Error("stored_expense_invalid");
   // The same re-split the balances use, so each part's base amount is exactly what moved that member's balance.
   const baseParts = allocateLike(inBase.value.baseTotal, own.value);
+  const shares =
+    entry.split.mode === "shares" ? new Map(entry.split.parts.map((part) => [part.memberId, part.weight])) : null;
   return {
     id: entry.id,
     description: item.description,
@@ -35,6 +37,7 @@ function expenseView(item: LedgerExpense, base: Currency, known: ReadonlySet<str
       memberId,
       amount: formatAmount(amount, entry.currency),
       baseAmount: formatAmount(baseParts.get(memberId) ?? BigInt(0), base),
+      ...(shares === null ? {} : { weight: shares.get(memberId) }),
     })),
     version: item.version,
     createdAt: item.createdAt.toISOString(),
