@@ -104,7 +104,7 @@ function checkedPlan(balances: ReadonlyMap<MemberId, bigint>, plan: Transfer[]):
 export function settle(balances: ReadonlyMap<MemberId, bigint>): Transfer[] {
   const people = nonZeroById(balances);
   if (people.length > EXACT_SETTLE_LIMIT) return settleGreedy(balances);
-  return checkedPlan(balances, exactPlan(people));
+  return checkedPlan(balances, greedyPlan(people));
 }
 
 /**
