@@ -32,7 +32,7 @@ function largestRemainder(total: bigint, weights: readonly (readonly [MemberId, 
   });
   let leftover = total - rows.reduce((sum, row) => sum + row.part, 0n);
   const ranked = [...rows].sort((a, b) =>
-    b.remainder > a.remainder ? 1 : b.remainder < a.remainder ? -1 : b.position - a.position,
+    b.remainder > a.remainder ? 1 : b.remainder < a.remainder ? -1 : a.position - b.position,
   );
   for (const row of ranked) {
     if (leftover === 0n) break;
