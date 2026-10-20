@@ -467,16 +467,6 @@
   color: var(--copper-hi);
 }
 
-.labNext {
-  display: block;
-  height: 120vh;
-  padding: 24px;
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 /* An empty wrapper would still add a flex gap under the buttons, which would put the copy's 28px off. Under 640px
    the actions sit in the flow, where that gap is part of the layout that was already approved. */
 @media (min-width: 640px) {

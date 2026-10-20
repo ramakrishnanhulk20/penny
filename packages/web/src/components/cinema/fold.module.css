@@ -1,0 +1,596 @@
+/* The global stylesheet turns every section into a flex column, which would stack the fold's own children wrongly. */
+.fold,
+.staticFold {
+  display: block;
+  position: relative;
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.num {
+  color: var(--copper-hi);
+}
+
+.kicker {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border-top: 1px solid var(--rule);
+  padding-top: 14px;
+}
+
+/* The perforated edge is a mask, and a mask would cut the shadow off, so the shadow sits on the card around it. */
+.card {
+  border-radius: 3px;
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.55),
+    0 2px 0 rgba(0, 0, 0, 0.25);
+}
+
+.paper {
+  padding: 18px 18px 14px;
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 3px;
+  -webkit-mask: radial-gradient(circle at 6px 0, transparent 4px, #000 4.5px) 0 0 / 12px 100% repeat-x;
+  mask: radial-gradient(circle at 6px 0, transparent 4px, #000 4.5px) 0 0 / 12px 100% repeat-x;
+}
+
+.desc {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.payer {
+  margin-top: 4px;
+  font-family: var(--font-mono), monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6e655c;
+}
+
+.amount {
+  margin-top: 16px;
+  text-align: right;
+  font-family: var(--font-mono), monospace;
+  font-size: 20px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.rate {
+  margin-top: 4px;
+  text-align: right;
+  font-family: var(--font-mono), monospace;
+  font-size: 10.5px;
+  color: #6e655c;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The pinned layout. */
+.fold {
+  overflow: hidden;
+}
+
+.stage {
+  height: 100svh;
+  display: grid;
+  grid-template-columns: minmax(0, 0.42fr) minmax(0, 0.58fr);
+  column-gap: 56px;
+  padding: 104px 48px 48px;
+}
+
+.left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.titleStack {
+  position: relative;
+  margin-top: 28px;
+  height: 2.1em;
+  font-size: clamp(3.25rem, 6.4vw, 7rem);
+}
+
+.title {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  margin: 0;
+  font-size: 1em;
+  font-weight: 520;
+  letter-spacing: -0.045em;
+  line-height: 0.92;
+  color: var(--paper);
+}
+
+.captionStack {
+  position: relative;
+  margin-top: 22px;
+  min-height: 5.5em;
+  font-size: 18px;
+}
+
+.caption {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  max-width: 26rem;
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--paper-dim);
+}
+
+.titleLater,
+.captionLater {
+  opacity: 0;
+}
+
+.rail {
+  margin-top: auto;
+}
+
+.railLabels {
+  display: flex;
+  gap: 28px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.railLabel {
+  color: var(--muted);
+}
+
+.railLabel:first-child {
+  color: var(--paper);
+}
+
+.railTrack {
+  position: relative;
+  height: 1px;
+  margin-top: 12px;
+  background: var(--rule);
+}
+
+.railFill {
+  position: absolute;
+  inset: 0;
+  background: var(--copper);
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.visual {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+}
+
+.layer {
+  position: absolute;
+  inset: 0;
+}
+
+.receipts {
+  background: radial-gradient(ellipse at 45% 40%, rgba(200, 118, 62, 0.14), transparent 60%);
+}
+
+.cardSlot {
+  position: absolute;
+  width: clamp(180px, 15vw, 236px);
+  will-change: transform, opacity;
+}
+
+.balances {
+  opacity: 0;
+}
+
+.callout {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--paper-dim);
+}
+
+.calloutNote {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--copper-hi);
+}
+
+.balanceGrid {
+  position: absolute;
+  top: 22%;
+  bottom: 12%;
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 24px;
+}
+
+.balanceColumn {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.balanceHead {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--paper);
+  white-space: nowrap;
+}
+
+.balanceSentence {
+  margin-top: 8px;
+  min-height: 2.6em;
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.barArea {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.zeroLine {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px dashed var(--rule);
+}
+
+.bar {
+  position: absolute;
+  left: 27%;
+  width: 46%;
+}
+
+.barUp {
+  bottom: 50%;
+  transform-origin: 50% 100%;
+  background: linear-gradient(to top, var(--copper-lo), var(--copper));
+}
+
+.barDown {
+  top: 50%;
+  transform-origin: 50% 0;
+  background: rgba(242, 238, 232, 0.1);
+  border: 1px solid rgba(242, 238, 232, 0.38);
+}
+
+.barValue {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: var(--font-mono), monospace;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  color: var(--paper);
+  white-space: nowrap;
+  opacity: 0;
+}
+
+.nodes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.node {
+  opacity: 0;
+}
+
+.nodeCircle {
+  fill: var(--ink-2);
+  stroke: var(--copper);
+  stroke-width: 1.5;
+}
+
+.nodeName {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  fill: var(--paper);
+  text-anchor: middle;
+}
+
+.nodeRunning {
+  font-family: var(--font-mono), monospace;
+  font-size: 20px;
+  fill: var(--paper-dim);
+  text-anchor: middle;
+}
+
+.arc {
+  fill: none;
+  stroke: var(--copper);
+  stroke-width: 3;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 8px rgba(200, 118, 62, 0.55));
+  opacity: 0;
+}
+
+.arrowHead {
+  fill: var(--copper);
+}
+
+.arcLabel {
+  opacity: 0;
+}
+
+.arcLabelBox {
+  fill: var(--ink);
+  stroke: var(--rule);
+}
+
+.arcLabelText {
+  font-family: var(--font-mono), monospace;
+  font-size: 22px;
+  fill: var(--paper);
+  text-anchor: middle;
+}
+
+/* The static layout, for small screens, short windows and reduced motion. */
+.staticFold {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 88px 20px 72px;
+}
+
+.staticActs {
+  display: flex;
+  flex-direction: column;
+  gap: 72px;
+  margin-top: 40px;
+}
+
+.staticTitle {
+  margin: 0;
+  font-size: clamp(2.75rem, 12vw, 4.5rem);
+  font-weight: 520;
+  letter-spacing: -0.045em;
+  line-height: 0.92;
+  color: var(--paper);
+}
+
+.staticCaption {
+  margin-top: 16px;
+  max-width: 34rem;
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--paper-dim);
+}
+
+.staticBody {
+  margin-top: 28px;
+}
+
+.staticCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 240px));
+  gap: 12px;
+}
+
+.staticCallout {
+  position: static;
+  margin-bottom: 24px;
+  max-width: 40rem;
+}
+
+.staticBalances,
+.staticPayments {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-width: 40rem;
+}
+
+.staticRow {
+  padding: 16px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.staticRowTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.staticName {
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--paper);
+}
+
+.staticAmount {
+  font-family: var(--font-mono), monospace;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  color: var(--paper);
+  white-space: nowrap;
+}
+
+.staticSentence {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.staticTrack {
+  position: relative;
+  height: 12px;
+  margin-top: 12px;
+}
+
+.staticTrack::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 0;
+  border-left: 1px dashed var(--rule);
+}
+
+.staticBar {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+}
+
+.staticBarUp {
+  left: 50%;
+  background: linear-gradient(to right, var(--copper-lo), var(--copper));
+}
+
+.staticBarDown {
+  right: 50%;
+  background: rgba(242, 238, 232, 0.1);
+  border: 1px solid rgba(242, 238, 232, 0.38);
+}
+
+.payRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  column-gap: 14px;
+  padding: 18px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.payName {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding-bottom: 2px;
+}
+
+.payMid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.payAmount {
+  font-family: var(--font-mono), monospace;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--paper);
+}
+
+.payLine {
+  position: relative;
+  width: 100%;
+  height: 12px;
+  margin-bottom: 4px;
+}
+
+.payLineSvg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% - 6px);
+  height: 12px;
+  overflow: visible;
+}
+
+.payArrowSvg {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 9px;
+  height: 12px;
+}
+
+.payStroke {
+  fill: none;
+  stroke: var(--copper);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.payArrow {
+  fill: var(--copper);
+}
+
+.staticProof {
+  margin-top: 20px;
+  max-width: 34rem;
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--paper-dim);
+}
+
+@media (min-width: 900px) and (prefers-reduced-motion: reduce) {
+  .staticFold {
+    padding: 88px 48px 72px;
+  }
+}
+
+@media (max-width: 419.98px) {
+  .staticCards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Reduced motion is settled in CSS, not script, so the server and the browser render the same markup. !important
+   beats the inline styles the motion library writes. */
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .payStroke {
+    stroke-dasharray: none !important;
+    stroke-dashoffset: 0 !important;
+  }
+
+  .payArrowSvg {
+    opacity: 1 !important;
+  }
+}
