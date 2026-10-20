@@ -5,14 +5,18 @@ import type { ChangeBaseCurrencyResponse } from "@/lib/api-types";
 import { buildGroupView } from "@/lib/group-view";
 import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 import { resolveGroup } from "@/lib/groups";
-import { badRequest, json, notFound, serverError } from "@/lib/http";
+import { badRequest, json, notFound, sendsNonJsonBody, serverError, unsupportedMediaType } from "@/lib/http";
 import { changeBaseCurrency } from "@/lib/ledger-store";
 import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
 
+// Vercel stops this function after 10 s, so a stuck database or upstream call cannot hold it open (threat model C26).
+export const maxDuration = 10;
+
 /**
- * Reads the group named by the x-penny-group header. Writes nothing.
+ * Reads the group named by the x-penny-group header. Writes nothing but the rate limit counts.
  * 200 GroupView. 404 not_found, byte for byte the same for a missing, malformed or unknown token.
- * 429 rate_limited past LIMITS.groupRead from one client network. Any other failure is a bare 500.
+ * 429 rate_limited past LIMITS.groupRead from one client network, or past LIMITS.groupReadPerGroup for the group the
+ * token names; an unknown token is a 404 first. Any other failure is a bare 500.
  */
 export async function GET(request: Request): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
@@ -23,6 +27,7 @@ export async function GET(request: Request): Promise<Response> {
       if (!(await takeRateLimit(db, LIMITS.groupRead, network))) return tooMany();
       const group = await resolveGroup(db, request.headers.get(GROUP_TOKEN_HEADER));
       if (group === null) return notFound();
+      if (!(await takeRateLimit(db, LIMITS.groupReadPerGroup, group.id))) return tooMany();
       return json(await buildGroupView(db, group));
     });
   } catch {
@@ -32,16 +37,19 @@ export async function GET(request: Request): Promise<Response> {
 
 /**
  * Changes the base currency of the group named by the x-penny-group header. Body: { baseCurrency }, nothing else.
- * 200 { group }, and the same 200 with nothing written when the group already has that base.
- * 400 invalid_body or bad_currency. 404 not_found for an unknown token. 409 base_locked once the group has had any
- * expense or payment, deleted ones included; 409 limit_reached once the group holds MAX_EVENTS events.
+ * 200 { group }, and the same 200 with nothing written when the group already has that base, money or not.
+ * 400 invalid_body or bad_currency. 404 not_found for an unknown token. 409 base_locked for any other base once the
+ * group has had any expense or payment, deleted ones included; 409 limit_reached once the group holds MAX_EVENTS
+ * events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
+ * 415 unsupported_media_type when the request carries a body that is not declared application/json.
  * Any other failure is a bare 500.
  */
 export async function PATCH(request: Request): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
   await connection();
+  if (sendsNonJsonBody(request)) return unsupportedMediaType();
   try {
     // Counted on a short connection of its own, so the body below is still read with no connection held.
     const allowed = await withDb(async (db) =>

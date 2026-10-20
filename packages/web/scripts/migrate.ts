@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { Pool } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import { migrate } from "drizzle-orm/neon-serverless/migrator";
+import { assertEveryMigrationApplied } from "../src/db/migration-check";
 import { serverEnv } from "../src/lib/env";
 
 // Runs before every `next build`, so the schema only ever changes through migration files committed to the repo.
@@ -27,7 +28,10 @@ async function main(): Promise<number> {
 
   const pool = new Pool({ connectionString: serverEnv().DATABASE_URL });
   try {
-    await migrate(drizzle({ client: pool }), { migrationsFolder });
+    const db = drizzle({ client: pool });
+    await migrate(db, { migrationsFolder });
+    // The migrator skips a file dated before the newest one applied and reports success; the build stops here instead.
+    await assertEveryMigrationApplied(db, migrationsFolder);
   } finally {
     await pool.end();
   }

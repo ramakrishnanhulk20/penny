@@ -91,7 +91,7 @@ describe("after a reset", () => {
     const started = await startGroup();
     oldToken = started.token;
     expense = (await (await postExpense(oldToken, expenseBody(started.group))).json()).expense;
-    paymentId = (await (await postPayment(oldToken, paymentBody(started.group))).json()).payment.id;
+    paymentId = (await (await postPayment(oldToken, paymentBody(await readGroup(oldToken)))).json()).payment.id;
     memberId = (await (await postMember(oldToken, { name: "Dev" })).json()).member.id;
     before = await readGroup(oldToken);
     newToken = newLinkToken();
@@ -104,8 +104,8 @@ describe("after a reset", () => {
     reset = JSON.parse(resetText) as ResetLinkResponse;
   });
 
-  it("answers with the same group, its version moved on, and no token", () => {
-    expect(reset).toEqual({ group: { ...before, version: before.version + 1 } });
+  it("answers with the same group, its version unchanged, and no token", () => {
+    expect(reset).toEqual({ group: before });
   });
 
   it("stores the hash of the browser's token in place of the old one, and never the token", async () => {
@@ -206,7 +206,7 @@ describe("a reset whose answer was lost", () => {
 
     expect(retry.status).toBe(200);
     const { group: view } = (await retry.json()) as ResetLinkResponse;
-    expect(view).toEqual({ ...group, version: group.version + 1 });
+    expect(view).toEqual(group);
     expect(await readGroup(newToken)).toEqual(view);
     expect((await getGroup(token)).status).toBe(404);
     expect(await eventCount(group.id)).toBe(logged);

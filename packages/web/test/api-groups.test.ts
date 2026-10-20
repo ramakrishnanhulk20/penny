@@ -75,6 +75,33 @@ describe("POST /api/groups", () => {
     expect(log.slice(1).map((row) => row.entityId)).toEqual(group.members.map((member: { id: string }) => member.id));
   });
 
+  it("accepts names written with a joiner between two visible characters, and stores them as sent", async () => {
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    const persian = "\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645";
+    const sinhala = "\u0DC1\u0DCA\u200D\u0DBB\u0DD3";
+
+    const { group } = await startGroup({ name: `${family} trip`, members: [family, persian, sinhala] });
+
+    expect(group.name).toBe(`${family} trip`);
+    expect(group.members.map((member) => member.name)).toEqual([family, persian, sinhala]);
+  });
+
+  it.each([
+    ["a joiner at the start", "\u200DAna"],
+    ["a non-joiner at the end", "Ana\u200C"],
+    ["a joiner on its own", "\u200D"],
+    ["two joiners in a row", "A\u200D\u200Dna"],
+    ["a joiner next to a space", "Ana \u200DBen"],
+    ["a right-to-left mark", "Ana\u200F"],
+    ["a zero-width space", "A\u200Bna"],
+    ["a soft hyphen", "A\u00ADna"],
+  ])("refuses a member name with %s as bad_member_name", async (_label, name) => {
+    const response = await postGroup(groupBody({ members: ["Ben", name] }));
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("bad_member_name");
+  });
+
   it("accepts names at their exact limits, counting an emoji as one character", async () => {
     const { group } = await startGroup({ name: "g".repeat(60), members: ["m".repeat(40), "\u{1F600}".repeat(40)] });
 
@@ -99,7 +126,9 @@ describe("POST /api/groups", () => {
 
   it("refuses a body that claims more than 16 KB before reading it", async () => {
     const request = jsonRequest("/api/groups", groupBody());
-    const oversized = new Request(request, { headers: { "content-length": String(16 * 1024 + 1) } });
+    const oversized = new Request(request, {
+      headers: { "content-type": "application/json", "content-length": String(16 * 1024 + 1) },
+    });
 
     expect(await errorCode(await createGroupRoute(oversized))).toBe("invalid_body");
   });
@@ -119,7 +148,7 @@ describe("POST /api/groups", () => {
     ["too_many_members", "21 members", groupBody({ members: Array.from({ length: 21 }, (_, i) => `Member ${i}`) })],
     ["bad_member_name", "an empty member name", groupBody({ members: ["Ana", " "] })],
     ["bad_member_name", "a 41 character member name", groupBody({ members: ["Ana", "m".repeat(41)] })],
-    ["bad_member_name", "a member name with a zero-width joiner", groupBody({ members: ["Ana", "B‍en"] })],
+    ["bad_member_name", "a member name that starts with a zero-width joiner", groupBody({ members: ["Ana", "\u200DBen"] })],
     ["duplicate_member_name", "names that differ only in case", groupBody({ members: ["Ana", "ANA"] })],
     ["duplicate_member_name", "composed and decomposed accents", groupBody({ members: ["José", "José"] })],
   ])("answers %s for %s and writes nothing", async (code, _label, body) => {

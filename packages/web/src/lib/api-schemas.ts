@@ -10,13 +10,12 @@ import type {
   ResetLinkRequest,
 } from "./api-types";
 import { parseGroupToken } from "./group-token";
-import { cleanName } from "./text";
+import { DESCRIPTION_MAX, GROUP_NAME_MAX, MEMBER_NAME_MAX, cleanName } from "./text";
+
+export { DESCRIPTION_MAX, GROUP_NAME_MAX, MEMBER_NAME_MAX };
 
 /** Bodies above this many bytes are refused before any parsing. */
 export const MAX_BODY_BYTES = 16 * 1024;
-export const GROUP_NAME_MAX = 60;
-export const MEMBER_NAME_MAX = 40;
-export const DESCRIPTION_MAX = 80;
 export const MIN_MEMBERS = 2;
 export const MAX_MEMBERS = 20;
 /** The largest version an expense can be at: the top of the Postgres integer column that stores it. */
@@ -100,6 +99,7 @@ export const editExpenseBody = z.strictObject({
 
 export const addPaymentBody = z.strictObject({
   clientId,
+  planVersion: z.int().min(0),
   from: memberId,
   to: memberId,
   amount: z.string(),

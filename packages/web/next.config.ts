@@ -33,6 +33,8 @@ function contentSecurityPolicy(): string {
 const groupPages = [{ key: "X-Robots-Tag", value: "noindex, nofollow" }];
 
 const nextConfig: NextConfig = {
+  // A verification build sets this so it never writes into the .next a running dev server is using.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   cacheComponents: true,
   partialPrefetching: true,
   transpilePackages: ["@penny/core"],

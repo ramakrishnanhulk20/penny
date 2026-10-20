@@ -26,7 +26,8 @@ afterEach(() => {
 });
 
 function postSampleTrip(address = "203.0.113.7"): Promise<Response> {
-  return POST(new Request("http://localhost/api/sample-trip", { method: "POST", headers: { "x-vercel-forwarded-for": address } }));
+  const headers = { "content-type": "application/json", "x-vercel-forwarded-for": address };
+  return POST(new Request("http://localhost/api/sample-trip", { method: "POST", headers }));
 }
 
 async function sampleTrip(address?: string): Promise<CreateGroupResponse> {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "@/db/client";
 import { checksSnapshot } from "@/db/schema";
 
-export type Verdict = "passed" | "failed" | "running" | "not run" | "unknown";
+export type Verdict = "passed" | "failed" | "blocked" | "running" | "not run" | "unknown";
 export type PrCheck = {
   number: number;
   title: string;
@@ -35,6 +35,12 @@ const STATUS_CONTEXT = "TestSprite V3";
 // testsprite[bot], the user that TestSprite's GitHub App (id 2756476) posts statuses as. Anyone with push access can
 // post a status with the same context name, so the creator id is the identity, never the name (threat model C22).
 const TESTSPRITE_BOT_ID = 258111874;
+// ramakrishnanhulk20, the account that owns the repository. Only pull requests it opened are listed, so a stranger's
+// title never reaches the page and a stranger's twelve new pull requests cannot push the owner's out of view. The id,
+// never the login, because a login can be renamed and taken over; an id cannot.
+const OWNER_ID = 140826327;
+// Read before the owner filter, so stranger pull requests in between still leave the owner's newest twelve in view.
+const PULLS_PER_PAGE = 50;
 const PR_LIMIT = 12;
 // Statuses come newest first, so the first page holds the newest TestSprite one; later pages are never fetched.
 const STATUSES_PER_PAGE = 100;
@@ -91,7 +97,9 @@ function readDescription(text: string): Description | null {
 
 /**
  * Turns one TestSprite commit status into a verdict and its counts.
- * "passed" needs state `success` and a result that reports no failed test. `failure` or `error` is "failed", and
+ * "passed" needs state `success` and a result that reports no failed test and at least one passed. A `success` where
+ * no test passed and some were blocked is "blocked": TestSprite marked it green, but nothing was shown to work.
+ * `failure` or `error` is "failed", and
  * `pending` is "running", each only with a description in a known shape. Anything else, a description in no known
  * shape, or one that contradicts its state (a success that lists failures, a failure where every test passed) is
  * "unknown" with every count null, never 0. The caller decides "not run" and checks who created the status.
@@ -108,7 +116,9 @@ export function parseVerdict(
       : { ...NO_COUNTS, total: read.total };
   switch (state) {
     case "success":
-      return read.kind === "result" && read.failed === 0 ? { verdict: "passed", ...counts } : UNKNOWN;
+      if (read.kind !== "result" || read.failed !== 0) return UNKNOWN;
+      if (read.passed === 0 && read.blocked > 0) return { verdict: "blocked", ...counts };
+      return { verdict: "passed", ...counts };
     case "failure":
     case "error":
       return read.kind === "result" && read.passed === read.total ? UNKNOWN : { verdict: "failed", ...counts };
@@ -210,7 +220,7 @@ function pullListUrl(): URL {
   url.searchParams.set("state", "all");
   url.searchParams.set("sort", "created");
   url.searchParams.set("direction", "desc");
-  url.searchParams.set("per_page", String(PR_LIMIT));
+  url.searchParams.set("per_page", String(PULLS_PER_PAGE));
   return url;
 }
 
@@ -229,6 +239,8 @@ const pullListSchema = z.array(
     merged_at: z.string().nullable(),
     merge_commit_sha: z.string().nullable(),
     head: z.object({ sha: z.string().regex(SHA_FORMAT) }),
+    // GitHub sends null for an account that has since been deleted; such a pull request is never the owner's.
+    user: z.object({ id: z.int() }).nullable(),
   }),
 );
 
@@ -273,15 +285,17 @@ function prState(pull: Pull): PrCheck["state"] {
 }
 
 /**
- * Reads the 12 newest pull requests of the Penny repository and the TestSprite verdict on each one's head commit,
- * live from the GitHub API, in at most 13 calls. The running commit comes from VERCEL_GIT_COMMIT_SHA and its pull
- * request from the merged PR whose merge commit it is. The token, when given, is sent to api.github.com only.
+ * Reads the 50 newest pull requests of the Penny repository, keeps the ones the owner's account opened, and reads the
+ * TestSprite verdict on the head commit of the 12 newest of those, live from the GitHub API, in at most 13 calls. The
+ * running commit comes from VERCEL_GIT_COMMIT_SHA and its pull request from the owner's merged PR whose merge commit it
+ * is. The token, when given, is sent to api.github.com only.
  * Throws when any call fails, times out after 5 s, answers anything but 200, redirects, sends more than 1 MB or sends
  * a pull request list in an unexpected shape. Pagination links are never followed.
  */
 export async function fetchSnapshot(fetchImpl: typeof fetch, token: string | null): Promise<ChecksSnapshot> {
   const pulls = pullListSchema
     .parse(await getJson(fetchImpl, pullListUrl(), token))
+    .filter((pull) => pull.user?.id === OWNER_ID)
     .sort((a, b) => b.number - a.number)
     .slice(0, PR_LIMIT);
   const statuses = await Promise.all(pulls.map((pull) => getJson(fetchImpl, statusesUrl(pull.head.sha), token)));
@@ -311,7 +325,7 @@ const storedSnapshotSchema = z.object({
         title: z.string(),
         state: z.enum(["open", "merged", "closed"]),
         headSha: z.string().regex(SHA_FORMAT),
-        verdict: z.enum(["passed", "failed", "running", "not run", "unknown"]),
+        verdict: z.enum(["passed", "failed", "blocked", "running", "not run", "unknown"]),
         passed: countSchema,
         failed: countSchema,
         blocked: countSchema,

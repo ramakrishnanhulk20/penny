@@ -30,6 +30,7 @@ This document describes exactly what Penny does, screen by screen, including the
   - Fewer than 2 named members: "Add at least two members."
   - Duplicate names: "Each member needs a different name."
   - Name too long: "Names can be at most 40 characters." (group name: "Group names can be at most 60 characters.")
+  - Hidden formatting characters, such as a text-direction mark or an invisible space: "Remove hidden formatting characters from this name." (group name: "Remove hidden formatting characters from the group name."; expense description: "Remove hidden formatting characters from the description."). The joining characters inside emoji such as a family emoji, and inside Persian, Hindi or Sinhala spellings, are allowed.
 - On success the browser opens the group page and shows a banner: "Group created. Share this link with your group:" followed by the full link and a "Copy link" button.
 
 ### 3. Group page `/g#<link-secret>`
@@ -103,12 +104,14 @@ A public page showing how Penny is tested. For the version that is live right no
 5. Pressing "Add expense" twice quickly, or a dropped connection that retries, never adds the expense twice.
 6. One group's link can never read or change another group.
 7. After "Reset link", the old link opens nothing.
+8. Pressing "Mark as paid" on a page that is out of date, for example on a second phone, never records the payment twice.
 
 ## Limits
 
 - 2 to 20 members per group; 500 expenses and 500 payments per group.
 - Over a group's whole life: 2,000 expenses (deleted ones included), 2,000 payments (undone ones included) and 10,000 changes of any kind. A group past one of these can still be opened and read, but not changed in that way; past 10,000 changes, not changed at all except that its link can still be reset (so a leaked link can always be cut off; resets stay limited to 120 a minute per group).
 - A change refused by one of the expense, payment or change limits shows "This group has reached its size limit."
+- Too many requests from one network within a minute show "Too many requests from your network. Wait a minute and try again."
 - Amounts up to 10^12 of the currency's smallest unit (10,000,000,000.00 in a two-decimal currency).
 - Rates above 0 and up to 1,000,000, with at most 10 decimals.
 

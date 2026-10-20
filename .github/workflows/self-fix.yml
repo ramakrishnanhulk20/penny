@@ -228,6 +228,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      statuses: write
     steps:
       - name: Check out the checker from the default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -266,6 +267,7 @@ jobs:
           RULE: ${{ needs.fix.outputs.rule }}
         run: node scripts/self-fix/check-diff.mjs --refused "$RULE"
       - name: Apply, commit and push as a fast-forward onto the tested commit
+        id: push
         if: steps.check.outputs.ok == 'true'
         working-directory: pr
         env:
@@ -293,3 +295,18 @@ jobs:
         run: |
           [[ "$PR" =~ ^[0-9]+$ ]] || { echo "unexpected pull request number"; exit 1; }
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/self-fix-comment.md"
+      # A push made with this workflow's token starts no other workflow, so maintainer-review.yml
+      # never runs on the robot's commit. Without this its new head would show no review status.
+      # It runs even if the comment failed: the two do not depend on each other.
+      - name: Mark the pushed commit as waiting for Ram's review
+        if: ${{ !cancelled() && steps.push.outcome == 'success' }}
+        working-directory: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "unexpected commit id"; exit 1; }
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${sha}" --silent \
+            -f state=pending \
+            -f context=maintainer-review \
+            -f "description=Waiting for Ram to review the robot's fix (add the reviewed label)"

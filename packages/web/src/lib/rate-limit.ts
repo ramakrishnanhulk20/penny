@@ -11,13 +11,16 @@ export type Limit = { bucket: string; limit: number; windowSeconds: number };
 const WINDOW_SECONDS = 60;
 const UNKNOWN_NETWORK = "unknown";
 const SERVER_KEY_BYTES = 32;
-const SWEEP_OLDER_THAN_MS = 24 * 60 * 60 * 1000;
+// Every window is a minute long, so a row ten minutes old can never be counted again; keeping it only grows the table.
+const SWEEP_OLDER_THAN_MS = 10 * 60 * 1000;
 const SWEEP_EVERY_MS = 60 * 1000;
 
 /**
  * The request limits, each a fixed window per client network unless named per group. TestSprite runs up to 21 tests
  * at once, sometimes two runs together, from a few cloud addresses, which is why the per-network numbers are not
- * lower. groupRead also counts /api/checks, so its bucket is named for every read.
+ * lower. groupRead also counts /api/checks, so its bucket is named for every read. groupReadPerGroup holds one
+ * group's reads from every network together, so a stranger spread over many addresses still cannot make the server
+ * rebuild one large group's view without end.
  */
 export const LIMITS: {
   createGroup: Limit;
@@ -26,6 +29,7 @@ export const LIMITS: {
   groupWritePerNetwork: Limit;
   groupWritePerGroup: Limit;
   groupRead: Limit;
+  groupReadPerGroup: Limit;
 } = {
   createGroup: { bucket: "create-group", limit: 60, windowSeconds: WINDOW_SECONDS },
   sampleTrip: { bucket: "sample-trip", limit: 10, windowSeconds: WINDOW_SECONDS },
@@ -33,6 +37,7 @@ export const LIMITS: {
   groupWritePerNetwork: { bucket: "group-write", limit: 600, windowSeconds: WINDOW_SECONDS },
   groupWritePerGroup: { bucket: "group-write-per-group", limit: 120, windowSeconds: WINDOW_SECONDS },
   groupRead: { bucket: "read", limit: 600, windowSeconds: WINDOW_SECONDS },
+  groupReadPerGroup: { bucket: "read-per-group", limit: 240, windowSeconds: WINDOW_SECONDS },
 };
 
 /** 429 {"error":{"code":"rate_limited"}} with Retry-After set to the window every limit uses, and Cache-Control no-store. */
@@ -126,9 +131,9 @@ const lastSweep = new Map<string, number>();
  * fixed window of limit.windowSeconds, counted from the Unix epoch. The count is one atomic upsert on a rate_limits
  * row, so it holds across every instance and concurrent requests cannot both take the last place. Requests over the
  * limit are still counted. Rows of this key's earlier windows in the bucket are deleted, and at most once a minute
- * per instance and bucket, every window of the bucket older than a day goes too. Returns true when the request may go
- * ahead. Throws when the database fails, when the key is empty, or when the limit or window is not a positive whole
- * number.
+ * per instance and bucket, every window of the bucket older than ten minutes goes too. Returns true when the request
+ * may go ahead. Throws when the database fails, when the key is empty, or when the limit or window is not a positive
+ * whole number.
  */
 export async function takeRateLimit(db: Db, limit: Limit, key: string): Promise<boolean> {
   const { bucket, limit: allowed, windowSeconds } = limit;

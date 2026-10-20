@@ -13,7 +13,7 @@ function errorCode(body: unknown): string {
 }
 
 /**
- * POST /api/sample-trip with no body. On success the body carries the new group's link token, which the caller puts
+ * POST /api/sample-trip with no body, declared JSON because the route refuses anything else. On success the body carries the new group's link token, which the caller puts
  * only in the address fragment; a token in any other format is treated as an unreadable answer ("internal").
  * "rate_limited" after too many sample trips from this network, "network" when no answer arrived.
  */
@@ -22,6 +22,7 @@ export async function startSampleTrip(): Promise<ApiResult<CreateGroupResponse>>
   try {
     response = await fetch("/api/sample-trip", {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
       cache: "no-store",
       credentials: "same-origin",
       referrerPolicy: "no-referrer",

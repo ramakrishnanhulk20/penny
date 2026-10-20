@@ -98,6 +98,8 @@ export type DeleteExpenseResponse = { group: GroupView };
 
 export type AddPaymentRequest = {
   clientId: string;
+  /** GroupView.version of the plan the payer pressed "Mark as paid" on. A new payment on any other version is refused. */
+  planVersion: number;
   from: string;
   to: string;
   amount: string;

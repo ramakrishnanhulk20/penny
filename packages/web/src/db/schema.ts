@@ -18,6 +18,14 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 
+// The bounds the app already enforces, repeated here as database checks so no write from any path can store a value
+// the app would refuse. A currency code is three ASCII capitals (core's currency()); an amount is at most
+// MAX_AMOUNT_MINOR, 10^12 minor units (core's parseAmount); a rate has a positive units and a scale of at most
+// MAX_RATE_SCALE, 10 (core's parseRate). test/schema.test.ts holds each bound to core's own constant.
+const CURRENCY_CODE = sql.raw("'^[A-Z]{3}$'");
+const MAX_AMOUNT_MINOR = sql.raw("1000000000000");
+const MAX_RATE_SCALE = sql.raw("10");
+
 // drizzle-orm 0.45 has no bytea column of its own.
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType() {
@@ -25,16 +33,23 @@ const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   },
 });
 
-export const groups = pgTable("groups", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  // Only the sha256 of the link token is stored, so a copy of the database holds no working link. The constraint
-  // groups_token_hash_format (64 lowercase hex characters) is hand-written in migration 0003, outside this file.
-  tokenHash: text("token_hash").notNull().unique("groups_token_hash_unique"),
-  name: text("name").notNull(),
-  baseCurrency: char("base_currency", { length: 3 }).notNull(),
-  version: integer("version").notNull().default(1),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const groups = pgTable(
+  "groups",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Only the sha256 of the link token is stored, so a copy of the database holds no working link. The constraint
+    // groups_token_hash_format (64 lowercase hex characters) is hand-written in migration 0003, outside this file.
+    tokenHash: text("token_hash").notNull().unique("groups_token_hash_unique"),
+    name: text("name").notNull(),
+    baseCurrency: char("base_currency", { length: 3 }).notNull(),
+    version: integer("version").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("groups_base_currency_format", sql`${t.baseCurrency} ~ ${CURRENCY_CODE}`),
+    check("groups_version_nonnegative", sql`${t.version} >= 0`),
+  ],
+);
 
 export const members = pgTable(
   "members",
@@ -82,8 +97,13 @@ export const expenses = pgTable(
   },
   (t) => [
     check("expenses_amount_minor_positive", sql`${t.amountMinor} > 0`),
+    check("expenses_amount_minor_max", sql`${t.amountMinor} <= ${MAX_AMOUNT_MINOR}`),
+    check("expenses_currency_format", sql`${t.currency} ~ ${CURRENCY_CODE}`),
     check("expenses_rate_pair", sql`(${t.rateUnits} is null) = (${t.rateScale} is null)`),
+    check("expenses_rate_units_positive", sql`${t.rateUnits} > 0`),
+    check("expenses_rate_scale_range", sql`${t.rateScale} between 0 and ${MAX_RATE_SCALE}`),
     check("expenses_split_mode_known", sql`${t.splitMode} in ('equal', 'shares', 'exact')`),
+    check("expenses_version_nonnegative", sql`${t.version} >= 0`),
     // A retried create finds its first row here instead of writing a second one.
     unique("expenses_group_id_client_id_unique").on(t.groupId, t.clientId),
     unique("expenses_group_id_id_unique").on(t.groupId, t.id),
@@ -105,6 +125,9 @@ export const expenseParts = pgTable(
   },
   (t) => [
     check("expense_parts_weight_positive", sql`${t.weight} > 0`),
+    // An exact split stores each part's minor units here, so the amount bound holds; shares and equal weights sit far
+    // below it.
+    check("expense_parts_weight_max", sql`${t.weight} <= ${MAX_AMOUNT_MINOR}`),
     primaryKey({ name: "expense_parts_pk", columns: [t.expenseId, t.memberId] }),
     foreignKey({
       name: "expense_parts_expense_fk",
@@ -139,7 +162,11 @@ export const payments = pgTable(
   },
   (t) => [
     check("payments_amount_minor_positive", sql`${t.amountMinor} > 0`),
+    check("payments_amount_minor_max", sql`${t.amountMinor} <= ${MAX_AMOUNT_MINOR}`),
+    check("payments_currency_format", sql`${t.currency} ~ ${CURRENCY_CODE}`),
     check("payments_rate_pair", sql`(${t.rateUnits} is null) = (${t.rateScale} is null)`),
+    check("payments_rate_units_positive", sql`${t.rateUnits} > 0`),
+    check("payments_rate_scale_range", sql`${t.rateScale} between 0 and ${MAX_RATE_SCALE}`),
     check("payments_distinct_members", sql`${t.fromMember} <> ${t.toMember}`),
     unique("payments_group_id_client_id_unique").on(t.groupId, t.clientId),
     foreignKey({

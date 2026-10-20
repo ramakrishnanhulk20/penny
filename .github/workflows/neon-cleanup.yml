@@ -1,0 +1,47 @@
+name: neon-cleanup
+
+# Every pull request's Vercel preview gets its own Neon branch, a copy of the preview
+# database named preview/<git branch>. This deletes that copy when the pull request closes.
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  delete-preview-branch:
+    # A fork's pull request has no preview database and no access to the Neon key.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Neon's delete-branch-action installs neonctl unpinned at run time while holding the key,
+      # so this calls the Neon API directly and nothing third-party runs. A pull request that
+      # never got a preview has no branch and passes; a bad key or a failed call fails the job.
+      - name: Delete the preview database branch if it exists
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          BRANCH: preview/${{ github.head_ref }}
+        run: |
+          [[ "$BRANCH" =~ ^preview/[A-Za-z0-9._/-]+$ && "$BRANCH" != *..* ]] || { echo "unexpected branch name"; exit 1; }
+          [[ "$NEON_PROJECT_ID" =~ ^[a-z0-9-]+$ ]] || { echo "NEON_PROJECT_ID is missing or unexpected"; exit 1; }
+          [ -n "$NEON_API_KEY" ] || { echo "NEON_API_KEY is missing"; exit 1; }
+          api="https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches"
+          # The search matches part of a name, so the exact name is picked out afterwards.
+          curl --fail --silent --show-error --max-time 30 --retry 2 --get \
+            -H "Authorization: Bearer $NEON_API_KEY" -H "Accept: application/json" \
+            --data-urlencode "search=$BRANCH" --data-urlencode "limit=10000" \
+            -o "$RUNNER_TEMP/branches.json" "$api"
+          ids="$(jq -r --arg name "$BRANCH" '[.branches[] | select(.name == $name) | .id] | join(" ")' "$RUNNER_TEMP/branches.json")"
+          rm -f "$RUNNER_TEMP/branches.json"
+          if [ -z "$ids" ]; then echo "no preview database branch for this pull request"; exit 0; fi
+          [[ "$ids" =~ ^br-[a-z0-9-]+$ ]] || { echo "expected exactly one branch id"; exit 1; }
+          curl --fail --silent --show-error --max-time 30 -X DELETE \
+            -H "Authorization: Bearer $NEON_API_KEY" -H "Accept: application/json" \
+            -o /dev/null "$api/$ids"
+          echo "deleted $BRANCH"

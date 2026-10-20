@@ -25,10 +25,20 @@ import {
 import type { ExpenseView, GroupView, MemberView, SplitRequest } from "@/lib/api-types";
 import { addExpense, editExpense } from "@/lib/client/api";
 import { lookUpRate } from "@/lib/client/fx";
-import { DESCRIPTION_MAX, FALLBACK_MESSAGE, cleanText, isTooLong, messageFor, type MessageContext } from "@/lib/client/messages";
+import {
+  DESCRIPTION_MAX,
+  FALLBACK_MESSAGE,
+  RATE_FIELD_CODES,
+  cleanText,
+  messageFor,
+  textProblem,
+  type MessageContext,
+} from "@/lib/client/messages";
 
 const CURRENCY_CODES = listCurrencies().map((cur) => cur.code);
 const ZERO = BigInt(0);
+// Arrow keys through the currency list change it once per currency passed; only the last one gets a lookup.
+const RATE_LOOKUP_DELAY_MS = 300;
 const NO_MEMBER_ERRORS: ReadonlyMap<string, string> = new Map();
 
 type Field = "description" | "amount" | "currency" | "rate" | "split" | "form";
@@ -64,9 +74,7 @@ type ExpenseCheck =
 // Unlike the server, it reports every bad field at once.
 function checkExpense(input: ExpenseInput): ExpenseCheck {
   const codes: { [field in Field]?: string } = {};
-  if (cleanText(input.description) === "" || isTooLong(input.description, DESCRIPTION_MAX)) {
-    codes.description = "bad_description";
-  }
+  if (textProblem(input.description, DESCRIPTION_MAX) !== null) codes.description = "bad_description";
 
   const parsed = parseAmount(input.amountText, input.cur);
   const total = parsed.ok ? parsed.value : null;
@@ -102,7 +110,7 @@ function fieldForServerCode(code: string): Field {
   if (code === "bad_description") return "description";
   if (code === "bad_currency") return "currency";
   if (code.startsWith("amount_") || code === "converts_to_zero" || code === "base_too_large") return "amount";
-  if (code.startsWith("rate_")) return "rate";
+  if (RATE_FIELD_CODES.has(code)) return "rate";
   if (code.startsWith("split_")) return "split";
   return "form";
 }
@@ -159,13 +167,20 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
   // Read inside the lookup's answer, which can arrive after any number of renders, so these live outside render.
   const rateTyped = useRef(false);
   const rateLookup = useRef<AbortController | null>(null);
+  const rateLookupTimer = useRef<number | null>(null);
   const suggestedRate = useRef<string | null>(null);
 
   useEffect(() => {
     if (focusRequest !== null) document.getElementById(focusRequest.id)?.focus();
   }, [focusRequest]);
 
-  useEffect(() => () => rateLookup.current?.abort(), []);
+  useEffect(
+    () => () => {
+      rateLookup.current?.abort();
+      if (rateLookupTimer.current !== null) window.clearTimeout(rateLookupTimer.current);
+    },
+    [],
+  );
 
   const base = currency(group.baseCurrency);
   const cur = currency(currencyCode);
@@ -176,6 +191,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
   const parsedAmount = parseAmount(amount, cur);
   const total = parsedAmount.ok ? parsedAmount.value : null;
   const context: MessageContext = {
+    description,
     currency: cur.code,
     digits: cur.digits,
     total: total === null ? undefined : formatAmount(total, cur),
@@ -202,31 +218,36 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
     }
   };
 
-  // Asked once per currency change. An answer for a currency that has since been changed again is dropped, and a
-  // rate the person typed is never replaced.
+  // Asked RATE_LOOKUP_DELAY_MS after the last currency change. A change in the meantime cancels the wait, an answer for
+  // a currency that has since been changed again is dropped, and a rate the person typed is never replaced.
   const lookUpReferenceRate = (code: string) => {
     rateLookup.current?.abort();
     rateLookup.current = null;
+    if (rateLookupTimer.current !== null) window.clearTimeout(rateLookupTimer.current);
+    rateLookupTimer.current = null;
     rateTyped.current = false;
     suggestedRate.current = null;
     if (code === base.code) {
       setRateSource({ state: "idle" });
       return;
     }
-    const controller = new AbortController();
-    rateLookup.current = controller;
     setRateSource({ state: "loading" });
-    void lookUpRate(code, base.code, controller.signal).then((found) => {
-      if (controller.signal.aborted) return;
-      rateLookup.current = null;
-      if (!found.ok) {
-        setRateSource({ state: "none" });
-        return;
-      }
-      suggestedRate.current = found.rate;
-      setRateSource({ state: "found", date: found.date });
-      if (!rateTyped.current) setRate((current) => (current === "" ? found.rate : current));
-    });
+    rateLookupTimer.current = window.setTimeout(() => {
+      rateLookupTimer.current = null;
+      const controller = new AbortController();
+      rateLookup.current = controller;
+      void lookUpRate(code, base.code, controller.signal).then((found) => {
+        if (controller.signal.aborted) return;
+        rateLookup.current = null;
+        if (!found.ok) {
+          setRateSource({ state: "none" });
+          return;
+        }
+        suggestedRate.current = found.rate;
+        setRateSource({ state: "found", date: found.date });
+        if (!rateTyped.current) setRate((current) => (current === "" ? found.rate : current));
+      });
+    }, RATE_LOOKUP_DELAY_MS);
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {

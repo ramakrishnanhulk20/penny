@@ -1,5 +1,7 @@
 // Not covered: the application checks in front of these constraints (amount parsing, split rules, comparing request_hash on a retry),
-// or Neon itself: this runs on PGlite, Postgres compiled to WebAssembly.
+// or Neon itself: this runs on PGlite, Postgres compiled to WebAssembly. Existing rows on Neon are checked when the
+// migration adds each constraint; that run is not part of this file.
+import { MAX_AMOUNT_MINOR, MAX_RATE_SCALE } from "@penny/core";
 import { asc, eq, sql } from "drizzle-orm";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
@@ -173,5 +175,79 @@ describe("database constraints", () => {
 
     const forged = sql`insert into events (seq, group_id, kind, payload) values (1, ${group.id}, 'forged', '{}'::jsonb)`;
     expect(await refusal(db.execute(forged))).toMatchObject({ code: "428C9" });
+  });
+
+  it("holds every amount, expense or payment or exact part, to core's MAX_AMOUNT_MINOR, and takes exactly it", async () => {
+    const { group, people } = await makeGroup(["Asha", "Ben"]);
+    const over = MAX_AMOUNT_MINOR + BigInt(1);
+
+    expect(
+      await refusal(db.insert(expenses).values({ ...expenseValues(group.id, people[0].id), amountMinor: over })),
+    ).toMatchObject({ code: "23514", constraint: "expenses_amount_minor_max" });
+    expect(
+      await refusal(db.insert(payments).values({ ...paymentValues(group.id, people[0].id, people[1].id), amountMinor: over })),
+    ).toMatchObject({ code: "23514", constraint: "payments_amount_minor_max" });
+    const [expense] = await db
+      .insert(expenses)
+      .values({ ...expenseValues(group.id, people[0].id), amountMinor: MAX_AMOUNT_MINOR })
+      .returning();
+    const part = { expenseId: expense.id, groupId: group.id, memberId: people[1].id };
+    expect(await refusal(db.insert(expenseParts).values({ ...part, weight: over }))).toMatchObject({
+      code: "23514",
+      constraint: "expense_parts_weight_max",
+    });
+    await db.insert(expenseParts).values({ ...part, weight: MAX_AMOUNT_MINOR });
+    await db.insert(payments).values({ ...paymentValues(group.id, people[0].id, people[1].id), amountMinor: MAX_AMOUNT_MINOR });
+  });
+
+  it.each(["eur", "EU", "xx?", "E1R", "ÉUR"])("refuses the currency code %j on groups, expenses and payments", async (code) => {
+    const { group, people } = await makeGroup(["Asha", "Ben"]);
+
+    expect(await refusal(db.update(groups).set({ baseCurrency: code }).where(eq(groups.id, group.id)))).toMatchObject({
+      code: "23514",
+      constraint: "groups_base_currency_format",
+    });
+    expect(
+      await refusal(db.insert(expenses).values({ ...expenseValues(group.id, people[0].id), currency: code })),
+    ).toMatchObject({ code: "23514", constraint: "expenses_currency_format" });
+    expect(
+      await refusal(db.insert(payments).values({ ...paymentValues(group.id, people[0].id, people[1].id), currency: code })),
+    ).toMatchObject({ code: "23514", constraint: "payments_currency_format" });
+  });
+
+  it("refuses rate units of zero or less and a scale outside 0 to core's MAX_RATE_SCALE, and takes both ends", async () => {
+    const { group, people } = await makeGroup(["Asha", "Ben"]);
+    const expense = (rateUnits: bigint, rateScale: number) =>
+      db.insert(expenses).values({ ...expenseValues(group.id, people[0].id), currency: "USD", rateUnits, rateScale });
+    const payment = (rateUnits: bigint, rateScale: number) =>
+      db.insert(payments).values({ ...paymentValues(group.id, people[0].id, people[1].id), currency: "USD", rateUnits, rateScale });
+
+    for (const [table, write] of [
+      ["expenses", expense],
+      ["payments", payment],
+    ] as const) {
+      expect(await refusal(write(BigInt(0), 2))).toMatchObject({ constraint: `${table}_rate_units_positive` });
+      expect(await refusal(write(BigInt(-5), 2))).toMatchObject({ constraint: `${table}_rate_units_positive` });
+      expect(await refusal(write(BigInt(92), -1))).toMatchObject({ constraint: `${table}_rate_scale_range` });
+      expect(await refusal(write(BigInt(92), MAX_RATE_SCALE + 1))).toMatchObject({ constraint: `${table}_rate_scale_range` });
+      await write(BigInt(1), 0);
+      await write(BigInt(1), MAX_RATE_SCALE);
+    }
+  });
+
+  it("refuses a negative version on groups and expenses, and takes 0", async () => {
+    const { group, people } = await makeGroup(["Asha"]);
+    const [expense] = await db.insert(expenses).values(expenseValues(group.id, people[0].id)).returning();
+
+    expect(await refusal(db.update(groups).set({ version: -1 }).where(eq(groups.id, group.id)))).toMatchObject({
+      code: "23514",
+      constraint: "groups_version_nonnegative",
+    });
+    expect(await refusal(db.update(expenses).set({ version: -1 }).where(eq(expenses.id, expense.id)))).toMatchObject({
+      code: "23514",
+      constraint: "expenses_version_nonnegative",
+    });
+    await db.update(groups).set({ version: 0 }).where(eq(groups.id, group.id));
+    await db.update(expenses).set({ version: 0 }).where(eq(expenses.id, expense.id));
   });
 });

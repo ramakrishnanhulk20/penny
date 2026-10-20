@@ -1,11 +1,12 @@
 // Not covered: the live frankfurter service (every call here goes to a fake fetch; the live answer was checked once by
-// hand with curl); a 5 s timeout actually firing (only that every call carries a timeout signal); Node's own fetch
-// refusing a redirect (only that every call asks it to); two real Postgres sessions racing on one rate_limits row,
-// because PGlite runs a single session; Vercel setting its address headers (the tests set them by hand); and the
-// expense form in a browser.
+// hand with curl); a 5 s timeout actually firing (only that every call carries a timeout signal, and that a call that
+// throws counts as a failure); Node's own fetch refusing a redirect (only that every call asks it to); two instances
+// asking about one pair at once (each shares one call only among its own lookups); two real Postgres sessions racing
+// on one rate_limits row, because PGlite runs a single session; Vercel setting its address headers (the tests set them
+// by hand); and the expense form in a browser.
 import { currency, type Currency } from "@penny/core";
 import { count } from "drizzle-orm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/fx/route";
 import { setDbForTests } from "@/db/client";
 import { fxCache, rateLimits } from "@/db/schema";
@@ -19,6 +20,8 @@ const USD_EUR_URL = "https://api.frankfurter.dev/v1/latest?from=USD&to=EUR";
 // Exactly what frankfurter answered on 19 Oct 2026.
 const GOOD = '{"amount":1.0,"base":"USD","date":"2026-10-16","rates":{"EUR":0.88865}}';
 const FOUND = { rate: "0.88865", date: "2026-10-16" };
+// Three days after GOOD's date, inside the window a rate date must fall in.
+const NOW = new Date("2026-10-19T12:00:00.000Z");
 const MAX_BYTES = 64 * 1024;
 
 function known(code: string): Currency {
@@ -64,7 +67,7 @@ describe("fetchRate", () => {
   it("calls only https://api.frankfurter.dev/v1/latest with from and to, refusing redirects, with a timeout", async () => {
     const frankfurter = fakeFrankfurter(answering(GOOD));
 
-    expect(await fetchRate(frankfurter.fetchImpl, USD, EUR)).toEqual(FOUND);
+    expect(await fetchRate(frankfurter.fetchImpl, USD, EUR, NOW)).toEqual(FOUND);
 
     expect(frankfurter.calls).toHaveLength(1);
     const [call] = frankfurter.calls;
@@ -80,7 +83,7 @@ describe("fetchRate", () => {
     ["a whole-number rate", answer({ base: "USD", rates: { EUR: 2 } }), "2"],
     ["a rate with exactly 10 decimals", answer({ rates: { EUR: 0.0000641234 } }), "0.0000641234"],
   ])("accepts %s", async (_label, text, rate) => {
-    expect(await fetchRate(fakeFrankfurter(answering(text)).fetchImpl, USD, EUR)).toEqual({ rate, date: "2026-10-16" });
+    expect(await fetchRate(fakeFrankfurter(answering(text)).fetchImpl, USD, EUR, NOW)).toEqual({ rate, date: "2026-10-16" });
   });
 
   it.each([
@@ -98,34 +101,36 @@ describe("fetchRate", () => {
     ["no rates at all", answer({ rates: null })],
     ["a date that does not exist", answer({ date: "2026-02-30" })],
     ["a date before the ECB's first rates", answer({ date: "1998-12-31" })],
+    ["a date two days ahead", answer({ date: "2026-10-21" })],
+    ["a date eleven days old", answer({ date: "2026-10-08" })],
     ["a date with a time", answer({ date: "2026-10-16T00:00:00Z" })],
     ["an array", `[${GOOD}]`],
     ["text that is not JSON", "<html>301 Moved Permanently</html>"],
   ])("refuses %s", async (_label, text) => {
-    expect(await fetchRate(fakeFrankfurter(answering(text)).fetchImpl, USD, EUR)).toBeNull();
+    expect(await fetchRate(fakeFrankfurter(answering(text)).fetchImpl, USD, EUR, NOW)).toBeNull();
   });
 
   it("refuses a body over 64 KB, read or declared, and accepts one of exactly 64 KB", async () => {
-    expect(await fetchRate(fakeFrankfurter(answering(GOOD.padEnd(MAX_BYTES, " "))).fetchImpl, USD, EUR)).toEqual(FOUND);
-    expect(await fetchRate(fakeFrankfurter(answering(GOOD.padEnd(MAX_BYTES + 1, " "))).fetchImpl, USD, EUR)).toBeNull();
+    expect(await fetchRate(fakeFrankfurter(answering(GOOD.padEnd(MAX_BYTES, " "))).fetchImpl, USD, EUR, NOW)).toEqual(FOUND);
+    expect(await fetchRate(fakeFrankfurter(answering(GOOD.padEnd(MAX_BYTES + 1, " "))).fetchImpl, USD, EUR, NOW)).toBeNull();
 
     const declared = () =>
       new Response(GOOD, { status: 200, headers: { "content-length": String(MAX_BYTES + 1) } });
-    expect(await fetchRate(fakeFrankfurter(declared).fetchImpl, USD, EUR)).toBeNull();
+    expect(await fetchRate(fakeFrankfurter(declared).fetchImpl, USD, EUR, NOW)).toBeNull();
   });
 
   it("refuses a redirect, even to the same origin, and never follows it", async () => {
     const redirect = fakeFrankfurter(
       () => new Response(null, { status: 301, headers: { location: "https://api.frankfurter.dev/v2/rates" } }),
     );
-    expect(await fetchRate(redirect.fetchImpl, USD, EUR)).toBeNull();
+    expect(await fetchRate(redirect.fetchImpl, USD, EUR, NOW)).toBeNull();
     expect(redirect.calls.map((call) => call.url)).toEqual([USD_EUR_URL]);
 
     // What Node's fetch does with redirect: "error" when the server redirects.
     const refused = fakeFrankfurter(() => {
       throw new TypeError("fetch failed: unexpected redirect");
     });
-    expect(await fetchRate(refused.fetchImpl, USD, EUR)).toBeNull();
+    expect(await fetchRate(refused.fetchImpl, USD, EUR, NOW)).toBeNull();
   });
 
   it.each([
@@ -138,7 +143,21 @@ describe("fetchRate", () => {
       },
     ],
   ])("gives no rate for %s", async (_label, reply) => {
-    expect(await fetchRate(fakeFrankfurter(reply).fetchImpl, USD, EUR)).toBeNull();
+    expect(await fetchRate(fakeFrankfurter(reply).fetchImpl, USD, EUR, NOW)).toBeNull();
+  });
+});
+
+describe("the rate date", () => {
+  it.each([
+    ["the day after today", "2026-10-21", true],
+    ["two days ahead", "2026-10-22", false],
+    ["exactly ten days before today", "2026-10-10", true],
+    ["eleven days before today", "2026-10-09", false],
+  ])("takes %s as a rate date: %s gives %s, at either end of today in UTC", async (_label, date, taken) => {
+    for (const now of [new Date("2026-10-20T00:00:00.000Z"), new Date("2026-10-20T23:59:59.999Z")]) {
+      const rate = await fetchRate(fakeFrankfurter(answering(answer({ date }))).fetchImpl, USD, EUR, now);
+      expect(rate).toEqual(taken ? { rate: "0.88865", date } : null);
+    }
   });
 });
 
@@ -165,7 +184,7 @@ describe("referenceRate", () => {
     expect(row.fetchedAt).toEqual(after(TWELVE_HOURS));
   });
 
-  it("remembers a failure as no rate for an hour, then asks frankfurter again", async () => {
+  it("remembers frankfurter's not-found answer as no rate for an hour, then asks frankfurter again", async () => {
     const db = await createTestDb();
     const missing = fakeFrankfurter(answering("{}", 404));
 
@@ -180,6 +199,73 @@ describe("referenceRate", () => {
     expect(await db.select().from(fxCache)).toEqual([
       { pair: "USD:EUR", rate: "0.88865", rateDate: "2026-10-16", fetchedAt: after(ONE_HOUR) },
     ]);
+  });
+
+  it("asks frankfurter once for many lookups of one new pair at the same time, and once per pair", async () => {
+    const db = await createTestDb();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = fakeFrankfurter(async () => {
+      await gate;
+      return answering(GOOD)();
+    });
+    const gbp = fakeFrankfurter(answering('{"amount":1.0,"base":"GBP","date":"2026-10-16","rates":{"EUR":1.15}}'));
+
+    const lookups = Array.from({ length: 25 }, () => referenceRate(db, slow.fetchImpl, USD, EUR, T0));
+    const other = referenceRate(db, gbp.fetchImpl, known("GBP"), EUR, T0);
+    await vi.waitFor(() => expect(slow.calls).toHaveLength(1));
+    release();
+
+    expect(await Promise.all(lookups)).toEqual(Array.from({ length: 25 }, () => FOUND));
+    expect(await other).toEqual({ rate: "1.15", date: "2026-10-16" });
+    expect([slow.calls.length, gbp.calls.length]).toEqual([1, 1]);
+    // The shared call is over, so a later miss asks again.
+    expect(await referenceRate(db, slow.fetchImpl, USD, EUR, after(TWELVE_HOURS))).toEqual(FOUND);
+    expect(slow.calls).toHaveLength(2);
+  });
+
+  it.each([
+    ["a server error", answering(GOOD, 503)],
+    ["a timeout or a network failure", () => Promise.reject(new DOMException("timed out", "TimeoutError"))],
+    ["an answer that is not JSON", answering("<html>busy</html>")],
+    ["a rate date eleven days old", answering(answer({ date: "2026-10-08" }))],
+  ])("remembers %s as no rate for one minute only, then asks again", async (_label, reply) => {
+    const db = await createTestDb();
+    const failing = fakeFrankfurter(reply);
+
+    expect(await referenceRate(db, failing.fetchImpl, USD, EUR, T0)).toBeNull();
+    expect(await db.select().from(fxCache)).toEqual([
+      { pair: "USD:EUR", rate: "failed", rateDate: "2026-10-19", fetchedAt: T0 },
+    ]);
+    expect(await referenceRate(db, failing.fetchImpl, USD, EUR, after(59_999))).toBeNull();
+    expect(failing.calls).toHaveLength(1);
+
+    const frankfurter = fakeFrankfurter(answering(GOOD));
+    expect(await referenceRate(db, frankfurter.fetchImpl, USD, EUR, after(60_000))).toEqual(FOUND);
+    expect(frankfurter.calls).toHaveLength(1);
+  });
+
+  it("remembers a good answer that lacks the pair as no rate for an hour", async () => {
+    const db = await createTestDb();
+    const without = fakeFrankfurter(answering(answer({ rates: { GBP: 0.77 } })));
+
+    expect(await referenceRate(db, without.fetchImpl, USD, EUR, T0)).toBeNull();
+    expect(await db.select().from(fxCache)).toEqual([{ pair: "USD:EUR", rate: "", rateDate: "2026-10-19", fetchedAt: T0 }]);
+    expect(await referenceRate(db, without.fetchImpl, USD, EUR, after(ONE_HOUR - 1))).toBeNull();
+    expect(without.calls).toHaveLength(1);
+    expect(await referenceRate(db, without.fetchImpl, USD, EUR, after(ONE_HOUR))).toBeNull();
+    expect(without.calls).toHaveLength(2);
+  });
+
+  it("does not serve a stored rate whose date has fallen out of the window, and asks again", async () => {
+    const db = await createTestDb();
+    await db.insert(fxCache).values({ pair: "USD:EUR", rate: "0.9", rateDate: "2026-10-08", fetchedAt: T0 });
+    const frankfurter = fakeFrankfurter(answering(GOOD));
+
+    expect(await referenceRate(db, frankfurter.fetchImpl, USD, EUR, after(1000))).toEqual(FOUND);
+    expect(frankfurter.calls).toHaveLength(1);
   });
 
   it("does not serve a stored row that fails the rate check, and keeps one pair from answering another", async () => {
@@ -197,6 +283,12 @@ describe("referenceRate", () => {
 });
 
 describe("GET /api/fx", () => {
+  // The route reads the clock itself, and GOOD's date must stay inside the rate date window.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
   it("answers the rate, its date and its source, and serves it from the table on the next request", async () => {
     setDbForTests(await createTestDb());
     const frankfurter = fakeFrankfurter(answering(GOOD));

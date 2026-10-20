@@ -4,6 +4,9 @@ import { FX_SOURCE, readPair, referenceRate } from "@/lib/fx";
 import { badRequest, json, serverError } from "@/lib/http";
 import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
 
+// Vercel stops this function after 10 s, so a stuck database or upstream call cannot hold it open (threat model C26).
+export const maxDuration = 10;
+
 /**
  * The latest ECB reference rate between two currencies, for prefilling the rate of a foreign expense.
  * Query: exactly `from` and `to`, two different ISO 4217 codes, nothing else.

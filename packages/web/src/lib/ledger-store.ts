@@ -239,10 +239,10 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-// `key` is what marks the request rather than the expense or payment (the clientId of an add, the version of an
-// edit), so the hash covers only what gets stored.
-function requestHash(input: AddExpenseBody | AddPaymentBody | EditExpenseBody, key: "clientId" | "version"): string {
-  const stored = Object.fromEntries(Object.entries(input).filter(([name]) => name !== key));
+// `marks` names what marks the request rather than the expense or payment (the clientId of an add, the version of an
+// edit, the plan version a payment was pressed on), so the hash covers only what gets stored.
+function requestHash(input: AddExpenseBody | AddPaymentBody | EditExpenseBody, marks: readonly string[]): string {
+  const stored = Object.fromEntries(Object.entries(input).filter(([name]) => !marks.includes(name)));
   return createHash("sha256").update(canonicalJson(stored), "utf8").digest("hex");
 }
 
@@ -563,7 +563,7 @@ export async function createGroup(db: Db, input: CreateGroupBody): Promise<Store
  * expense id and writes nothing; with a different body it is 409 "client_id_conflict".
  * Otherwise the amount, currency, rate and split are checked by @penny/core, the payer and every split member must
  * be current members of this group, and the expense row, its parts and an expense_added event are written in one
- * transaction (201).
+ * transaction that also moves the group's version on by one (201).
  * Refuses: 400 with the codes in the API contract; 404 "not_found" for any member id that is not a current member,
  * or when the link was reset after `group` was read; 409 "limit_reached" once the group holds MAX_LIVE_EXPENSES live
  * expenses, MAX_EXPENSE_ROWS expense rows (deleted ones included) or MAX_EVENTS events.
@@ -573,7 +573,7 @@ export async function addExpense(
   group: GroupRow,
   input: AddExpenseBody,
 ): Promise<StoreResult<{ status: 200 | 201; expenseId: string }>> {
-  const hash = requestHash(input, "clientId");
+  const hash = requestHash(input, ["clientId"]);
   try {
     return await db.transaction(async (tx) => {
       // Holding the group row serialises writes to one group, so the cap and the clientId check cannot race.
@@ -613,6 +613,7 @@ export async function addExpense(
         .values(splitWeights(entry.split).map((part) => ({ expenseId: entry.id, groupId: group.id, ...part })));
       const payload = expensePayload(entry, input.clientId, hash, input.description);
       await tx.insert(events).values({ groupId: group.id, kind: "expense_added", entityId: entry.id, payload });
+      await bumpVersion(tx, group.id);
       return { ok: true, value: { status: 201, expenseId: entry.id } };
     });
   } catch (error) {
@@ -642,7 +643,7 @@ export async function editExpense(
   expenseId: string,
   input: EditExpenseBody,
 ): Promise<StoreResult<{ expenseId: string; edited: boolean }>> {
-  const hash = requestHash(input, "version");
+  const hash = requestHash(input, ["version"]);
   return db.transaction(async (tx) => {
     // Under the group row lock the version read here is still the version when the update lands, and a retried edit
     // cannot slip in between the version check and the write.
@@ -755,31 +756,38 @@ export async function deleteExpense(
 }
 
 /**
- * Records that one current member of `group` paid another, exactly once per clientId.
- * A repeat of an earlier clientId with the same body (compared by request_hash) answers 200 with the original
- * payment id and writes nothing; with a different body it is 409 "client_id_conflict".
- * Otherwise the currency, amount and rate are parsed, @penny/core's entryInBase decides whether the payment is valid
- * for this group's current members, and the payment row and a payment_added event are written in one transaction
- * that also moves the group's version on by one (201).
+ * Records that one current member of `group` paid another, exactly once per clientId, and only on the plan the payer
+ * saw.
+ * A repeat of an earlier clientId with the same body (compared by request_hash, which leaves out clientId and
+ * planVersion) answers 200 with the original payment id and writes nothing, whatever the group's version is now; with
+ * a different body it is 409 "client_id_conflict".
+ * Otherwise `input.planVersion` must be the group's current version, then the currency, amount and rate are parsed,
+ * @penny/core's entryInBase decides whether the payment is valid for this group's current members, and the payment
+ * row and a payment_added event are written in one transaction that also moves the group's version on by one (201).
  * Refuses: 400 with the codes in the API contract; 404 "not_found" when `from` or `to` is not a current member of
- * this group, or when the link was reset after `group` was read; 409 "limit_reached" once the group holds
- * MAX_LIVE_PAYMENTS live payments, MAX_PAYMENT_ROWS payment rows (undone ones included) or MAX_EVENTS events.
+ * this group, or when the link was reset after `group` was read; 409 "stale_version" when planVersion is not the
+ * group's version; 409 "limit_reached" once the group holds MAX_LIVE_PAYMENTS live payments, MAX_PAYMENT_ROWS payment
+ * rows (undone ones included) or MAX_EVENTS events.
  */
 export async function addPayment(
   db: Db,
   group: GroupRow,
   input: AddPaymentBody,
 ): Promise<StoreResult<{ status: 200 | 201; paymentId: string }>> {
-  const hash = requestHash(input, "clientId");
+  const hash = requestHash(input, ["clientId", "planVersion"]);
   try {
     return await db.transaction(async (tx) => {
-      // The same group row lock as addExpense, so the cap and the clientId check cannot race.
+      // The same group row lock as addExpense, so the cap, the clientId check and the version check cannot race.
       const locked = await lockGroup(tx, group);
       if (locked === null) return NOT_FOUND;
       const base = storedCurrency(locked.baseCurrency);
 
       const earlier = await findPaymentByClientId(tx, group.id, input.clientId);
       if (earlier !== null) return answerPaymentRetry(earlier, hash);
+      // A settle-up line is only right for the plan it was shown on. Every write that can change the plan moves the
+      // version, so a press from a phone that has not seen the latest payment, expense or member is refused instead of
+      // paying a line that may already be paid.
+      if (input.planVersion !== locked.version) return STALE_VERSION;
 
       const [{ live }] = await tx
         .select({ live: count() })
@@ -861,8 +869,9 @@ export async function addPayment(
 }
 
 /**
- * Undoes one payment of `group`: the row keeps its data and gains deleted_at, and a payment_deleted event is written,
- * in one transaction. A payment that is already undone succeeds again with `undone: false` and nothing is written.
+ * Undoes one payment of `group`: the row keeps its data and gains deleted_at, a payment_deleted event is written and
+ * the group's version moves on by one, in one transaction. A payment that is already undone succeeds again with
+ * `undone: false` and nothing is written.
  * Precondition: `paymentId` is a uuid; the route checks it, since Postgres throws on anything else.
  * Refuses: 404 "not_found" when no payment with this id belongs to this group, or the link was reset after `group`
  * was read; 409 "limit_reached" once the group holds MAX_EVENTS events.
@@ -889,6 +898,7 @@ export async function undoPayment(db: Db, group: GroupRow, paymentId: string): P
       .where(and(eq(payments.groupId, group.id), eq(payments.id, row.id)));
     const payload: PaymentDeletedPayload = { paymentId: row.id };
     await tx.insert(events).values({ groupId: group.id, kind: "payment_deleted", entityId: row.id, payload });
+    await bumpVersion(tx, group.id);
     return { ok: true, value: { undone: true } };
   });
 }
@@ -998,10 +1008,11 @@ export async function removeMember(db: Db, group: GroupRow, memberId: string): P
  * Changes `group`'s base currency, only while the group has never had an expense or payment, deleted and undone ones
  * included, so no stored rate is ever read against a base it was not entered for (C14). Writes the new code, a
  * base_currency_changed event and moves the group's version on by one, in one transaction (`changed: true`). Asking
- * for the base the group already has succeeds with `changed: false` and writes nothing.
+ * for the base the group already has succeeds with `changed: false` and writes nothing, whether or not the group has
+ * had money.
  * Refuses: 400 "bad_currency" for a code @penny/core does not know; 404 "not_found" when the link was reset after
- * `group` was read; 409 "base_locked" once the group has had any expense or payment; 409 "limit_reached" once it
- * holds MAX_EVENTS events.
+ * `group` was read; 409 "base_locked" for any other base once the group has had any expense or payment; 409
+ * "limit_reached" once it holds MAX_EVENTS events.
  */
 export async function changeBaseCurrency(
   db: Db,
@@ -1014,8 +1025,9 @@ export async function changeBaseCurrency(
     // Under the group row lock no expense or payment can land between the history check and the change.
     const locked = await lockGroup(tx, group);
     if (locked === null) return NOT_FOUND;
-    if ((await loadHistory(tx, group.id)).hasEntries) return refuse(409, "base_locked");
+    // Nothing would change, so the lock has nothing to protect: a resend of a base already in place is not refused.
     if (locked.baseCurrency === next.code) return { ok: true, value: { changed: false } };
+    if ((await loadHistory(tx, group.id)).hasEntries) return refuse(409, "base_locked");
     if (await historyFull(tx, group.id)) return LIMIT_REACHED;
 
     await tx.update(groups).set({ baseCurrency: next.code }).where(eq(groups.id, group.id));
@@ -1027,9 +1039,10 @@ export async function changeBaseCurrency(
 }
 
 /**
- * Moves `group` to the link token the browser made: that token's hash replaces the old one, a link_reset event that
- * names no token or hash is written, and the group's version moves on by one, in one transaction (`rotated: true`).
- * The token itself is never stored. When the stored hash is already `newToken`'s, because this same reset landed
+ * Moves `group` to the link token the browser made: that token's hash replaces the old one and a link_reset event that
+ * names no token or hash is written, in one transaction (`rotated: true`). The group's version stays as it was: a new
+ * link changes no money and no member, so a settle-up plan on screen is still the current one. The token itself is
+ * never stored. When the stored hash is already `newToken`'s, because this same reset landed
  * after `group` was read, it succeeds again with `rotated: false` and writes nothing.
  * Precondition: `newToken` passed parseGroupToken; the route's schema checks it.
  * Not held to the history caps: a full group must still be able to cut off a leaked link (C26, C3). The per-group write
@@ -1053,7 +1066,6 @@ export async function resetLink(db: Db, group: GroupRow, newToken: string): Prom
       await tx.update(groups).set({ tokenHash: nextHash }).where(eq(groups.id, group.id));
       const payload: LinkResetPayload = {};
       await tx.insert(events).values({ groupId: group.id, kind: "link_reset", entityId: group.id, payload });
-      await bumpVersion(tx, group.id);
       return { ok: true, value: { rotated: true } };
     });
   } catch (error) {
