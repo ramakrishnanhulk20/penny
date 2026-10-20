@@ -45,5 +45,5 @@ export function cleanName(raw: string, max: number): string | null {
 
 /** The key two member names are compared on: NFC, then lower case. Stored as members.name_key. */
 export function nameKey(name: string): string {
-  return name.normalize("NFC").toLowerCase();
+  return name.normalize("NFC");
 }
