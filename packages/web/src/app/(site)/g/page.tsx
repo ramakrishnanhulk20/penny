@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Footer } from "@/components/cinema/footer";
 import { Nav } from "@/components/cinema/nav";
 import { GroupScreen } from "./group-screen";
 
@@ -10,6 +11,7 @@ export default function GroupPage() {
     <main className="cinema app">
       <Nav />
       <GroupScreen />
+      <Footer />
     </main>
   );
 }

@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { createMDX } from "fumadocs-mdx/next";
 
 // Read when the headers are built, which is build time on Vercel, so each deployment carries one fixed policy.
 function contentSecurityPolicy(): string {
@@ -56,4 +57,6 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+const withMDX = createMDX();
+
+export default withMDX(nextConfig);

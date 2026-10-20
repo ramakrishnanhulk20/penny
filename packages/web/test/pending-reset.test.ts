@@ -1,7 +1,7 @@
 // Not covered: the group page rendering its not-found state (that needs a browser; only the function its load waits on
 // is run here), a real browser's AbortSignal, and the 10 s timeout firing (only that the caller's abort reaches fetch).
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openPendingReset } from "@/app/g/group-screen";
+import { openPendingReset } from "@/app/(site)/g/group-screen";
 import type { GroupView } from "@/lib/api-types";
 
 const GROUP_ID = "00000000-0000-4000-8000-000000000001";

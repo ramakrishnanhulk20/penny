@@ -29,13 +29,19 @@ export function Nav() {
         <CoinMark size={18} />
         Penny
       </Link>
-      <a
-        href="https://github.com/ramakrishnanhulk20/penny"
-        rel="noreferrer"
-        className={`${styles.navLink} ${styles.navGithub}`}
-      >
-        GitHub
-      </a>
+      <div className={styles.navRight}>
+        {/* The docs have their own root layout and bundle; prefetching would download it on every page with this nav. */}
+        <Link href="/docs" prefetch={false} className={`${styles.navLink} ${styles.navGithub}`}>
+          Docs
+        </Link>
+        <a
+          href="https://github.com/ramakrishnanhulk20/penny"
+          rel="noreferrer"
+          className={`${styles.navLink} ${styles.navGithub}`}
+        >
+          GitHub
+        </a>
+      </div>
     </header>
   );
 }
