@@ -72,7 +72,7 @@ export const ISO4217_CURRENCIES: readonly { readonly code: string; readonly digi
   Object.freeze({ code: "ISK", digits: 0 }),
   Object.freeze({ code: "JMD", digits: 2 }),
   Object.freeze({ code: "JOD", digits: 3 }),
-  Object.freeze({ code: "JPY", digits: 0 }),
+  Object.freeze({ code: "JPY", digits: 2 }),
   Object.freeze({ code: "KES", digits: 2 }),
   Object.freeze({ code: "KGS", digits: 2 }),
   Object.freeze({ code: "KHR", digits: 2 }),
