@@ -76,8 +76,8 @@ export function entryInBase(entry: Entry, base: Currency, members: ReadonlySet<M
     const moved = inBase(entry.amount, entry.currency, entry.rate, base);
     if (!moved.ok) return moved;
     const deltas = new Map([
-      [entry.from, moved.value],
-      [entry.to, -moved.value],
+      [entry.from, -moved.value],
+      [entry.to, moved.value],
     ]);
     return { ok: true, value: { id: entry.id, baseTotal: moved.value, deltas } };
   }
