@@ -72,7 +72,7 @@ jobs:
             --permission-mode dontAsk \
             --permission-prompts none \
             --tools "Read,Edit,Write,Glob,Grep" \
-            --allowedTools "Read,Edit,Write,Glob,Grep" \
+            --allowedTools "Read,Glob,Grep,Edit(./**)" \
             --disallowedTools Bash WebFetch WebSearch Agent "mcp__*" \
             --max-turns 30 \
             --max-budget-usd 2 \

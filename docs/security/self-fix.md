@@ -32,6 +32,8 @@ Every job starts from no permissions and asks for only what it uses. Third-party
 
 The agent cannot read its own token. It has no shell to print its environment, its file tools are confined to the checkout, reads under `/proc` and the home folder are denied, and hooks, project settings, MCP servers and `CLAUDE.md` files are all switched off.
 
+Edits are allowed only inside the checkout (`--allowedTools "Read,Glob,Grep,Edit(./**)"`), and every edit under the home folder is denied, which covers the runner's workspace, its temp folder with the moved git folder, and the files GitHub reads step outputs and environment from. A bare `Edit` or `Write` in the allowed list would let the agent write anywhere on the runner, because Claude Code fences reads outside the working folder but has no such setting for writes. The first eight-line self-test caught exactly that (`outside write denied: no`, 20 Oct); this rule is the fix.
+
 ## Check the sandbox once before the first real self-fix
 
 The agent's limits above are settings and flags, so they are proven on a real runner before the loop is trusted. Run the `self-fix-selftest` workflow once by hand from the Actions tab. It installs Claude Code from the same lockfile, writes the same settings, and runs the agent with exactly the self-fix flags in `/tmp/probe`. A unit test (`scripts/self-fix/workflow-flags.test.mjs`) fails if the two workflows ever pass Claude Code different flags, apart from the output format.
