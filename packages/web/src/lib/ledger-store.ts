@@ -419,7 +419,7 @@ export async function loadHistory(db: Db, groupId: string): Promise<LedgerHistor
     ...sides.flatMap((row) => [row.from, row.to]),
   ]);
   // Every expense has a payer and every payment two sides, so these two lists are empty exactly when nothing exists.
-  return { hasEntries: payers.length > 0 || sides.length > 0, involved };
+  return { hasEntries: payers.length > 0 && sides.length > 0, involved };
 }
 
 /**
