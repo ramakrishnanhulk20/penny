@@ -773,7 +773,7 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
                         <button
                           type="button"
                           className="btn-sm"
-                          onClick={() => askDelete(expense.id)}
+                          onClick={() => void confirmDelete(expense)}
                           data-testid="expense-delete"
                         >
                           Delete
