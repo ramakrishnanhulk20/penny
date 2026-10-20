@@ -1,0 +1,78 @@
+---
+title: "Currencies and rates"
+description: "Which currencies Penny accepts, where the suggested exchange rate comes from, and how one conversion per expense is rounded."
+---
+
+## Currencies
+
+An expense can be in any currency from the ISO 4217 table that has a defined minor unit. That is 165 currencies. Codes such as XAU (gold) and XXX (no currency) have no minor unit and are refused.
+
+A code must be exactly three uppercase ASCII letters. "usd" is refused, not read as "USD", so a currency can never mean two things.
+
+The table gives each currency its number of decimals, and the same table is used for parsing, converting and showing amounts.
+
+| Decimals | Examples | Currencies in the table |
+| --- | --- | --- |
+| 0 | JPY | 17 |
+| 2 | USD, EUR, GBP | 139 |
+| 3 | KWD | 7 |
+| 4 | CLF, UYW | 2 |
+
+The page passes the digit count from this table when it shows an amount. It does not trust the browser's own currency formatter, whose data differs from ISO 4217 for some currencies. A test pins every stored code and its digits, so a regenerated table that drops or changes a code fails before it ships.
+
+## The base currency
+
+A group has one base currency, EUR unless you pick another. Balances, the settle-up plan and payments are all in the base currency, so balances never mix currencies.
+
+You can change the base currency only while the group has never had an expense or payment. After that the page says "Base currency is fixed once money is recorded." The reason: a stored rate means "this currency into that base", and a new base would silently change what every stored rate means.
+
+## The rate
+
+An expense in a currency other than the base needs a rate. The form shows a field labelled "Rate to EUR", with the base currency's code in place of EUR. Penny prefills it with the European Central Bank reference rate for the latest day, labelled with its date, for example "ECB reference rate, 2026-10-19". You can type your own rate instead, and the one you enter is the one that counts.
+
+If no rate can be fetched, the form says "No reference rate available. Enter the rate you used." Penny never fills in a default.
+
+A rate is an exact decimal: more than 0, up to 1,000,000, with at most 10 digits after the point. The form says "Enter a rate like 0.92." for anything else and "Enter the rate to EUR." when the field is empty. A rate on an expense that is already in the base currency is refused rather than ignored.
+
+### Where the suggested rate comes from
+
+Penny asks api.frankfurter.dev, which serves the ECB's daily reference rates. The call is built to reach that one address only.
+
+- Redirects are refused, there is a 5-second timeout and a size cap on the answer.
+- The answer must be for the pair that was asked, with a valid rate and a date no later than tomorrow and no more than 10 days old (UTC). Anything else counts as "no rate".
+- A good answer is kept for up to 12 hours, a "no rate for this pair" for an hour, and a failed call for 60 seconds, so many visitors cost the source one call per window.
+- Lookups are limited to 60 a minute per network.
+
+The ECB does not publish a rate for every pair of currencies. For a pair it leaves out, the form asks you to type the rate. The ECB reference rate is a daily rate, not what a bank charged you, so Penny states the date and lets you change the number.
+
+## One conversion per expense
+
+An expense is converted once, from its currency to the base currency, in exact integer arithmetic:
+
+amount in minor units, times the rate, shifted for the difference in decimals between the two currencies, rounded half up to a whole unit.
+
+Half up means a result exactly halfway between two units goes to the larger one.
+
+| Expense | Rate | Exact result | Rounded | Shown |
+| --- | --- | --- | --- | --- |
+| 150.00 USD to EUR | 0.92 | 13800 cents | 13800 | 138.00 EUR |
+| 10.01 USD to EUR | 0.92 | 920.92 cents | 921 | 9.21 EUR |
+| 0.05 USD to EUR | 0.5 | 2.5 cents | 3 | 0.03 EUR |
+| 12,000 JPY to EUR | 0.0061 | 7320 cents | 7320 | 73.20 EUR |
+
+The first row is the surf lesson in the Lisbon trip. The list shows it as "= 138.00 EUR at 0.92". The yen row is exact because the conversion also shifts two decimals: yen have none and euros have two.
+
+A conversion that rounds to zero is refused with "That amount is too small to convert." One that comes out above 10,000,000,000.00 in a two-decimal currency is refused with "That amount is too large."
+
+## Parts that still add up
+
+The base-currency parts are the foreign parts re-split over the converted total, using the same largest remainder rule as any other split. Converting each part on its own could give a total that is off by a cent.
+
+Take 1.00 USD split three ways at the rate 0.5.
+
+- The parts in USD are 0.34, 0.33 and 0.33.
+- The expense converts once to 0.50 EUR.
+- Converting each part on its own gives 0.17, 0.17 and 0.17 (0.33 times 0.5 is 0.165, which rounds half up to 0.17). That is 0.51 EUR, a cent that does not exist.
+- Re-splitting 0.50 in the proportions 34, 33 and 33 gives 0.17, 0.17 and 0.16, which add up to 0.50.
+
+Penny shows the second set. The parts add up in the expense's own currency and in the base currency. See [Exact to the cent](./exact-to-the-cent.mdx) for the rule.

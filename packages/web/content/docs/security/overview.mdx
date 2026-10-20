@@ -1,0 +1,56 @@
+---
+title: "Security overview"
+description: "What protects a group, its money and the build pipeline, linked to the numbered rules in the threat model, and what Penny does not defend against."
+---
+
+Penny's security rules are written down as 41 numbered invariants, C1 to C41, in the [threat model](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md). That file was written before the code, and its section C is the definition of done: the build is complete only when every invariant can be shown to hold.
+
+In security terms Penny is five systems at once: a store of many groups with a link as the only key, a small money ledger, a place that shows user-written text to other people, a caller of fixed outside services, and a build pipeline that runs pull request code and gives an AI coding agent text derived from it. The last one carries the highest risk, and it has its own page: [Self-fix safety](./self-fix-safety.mdx).
+
+## The link is the only key
+
+The secret is 128 random bits from a cryptographic generator, and only its SHA-256 hash is stored, so the database alone yields no working link. It travels in the `x-penny-group` header and never in a URL the server sees. Group pages send `Referrer-Policy: no-referrer` and `noindex`, and load no third-party scripts. Reading a group never changes it, and responses that carry group data are marked so no shared cache keeps them. One function turns a token into a group, and every entry point uses it. Rules: [C2 to C5](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#tenancy-and-the-link). A lost answer during a link reset can never leave a group without a working link: [C38](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#link-reset). The full story is on [The group link](../concepts/the-group-link.mdx).
+
+## Every id belongs to the group
+
+A request carries ids: an expense, a payer, each member in a split, the member to remove. Each one must belong to the group the secret names. A foreign id gets the same 404 as an unknown link, so the two cannot be told apart and nothing changes. This is the first rule, [C1](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#tenancy-and-the-link), because a handler that looked up an expense by its id alone would let anyone with any link edit another group. Every write endpoint also accepts one exact schema, rejects unknown fields and cannot set an id, token or creation time (C6).
+
+## Money never passes through a float
+
+One parser reads amounts and rates, in the browser and on the server. It accepts one plain grammar, parses into a big integer and never rounds. One ISO 4217 table supplies the decimals for parsing, converting and showing. Conversion uses exact integer arithmetic and rounds once per expense. Splits add up, and a plan that does not leave everyone at zero is an error, not an answer. The database repeats the bounds as `CHECK` constraints and refuses values the app never writes. Rules: [C7 to C14](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#money), C40 and C41. See [Exact to the cent](../concepts/exact-to-the-cent.mdx).
+
+## A retry cannot double a write
+
+Each create carries a `clientId` that is unique per group, and the database enforces it. A repeat with the same body returns the original, and a repeat with a different body is refused. An edit or delete names the version it saw, so it cannot overwrite someone else's change. A payment names the version of the group its plan line came from, so a stale page cannot record it twice (C39). Every change is written to an append-only event log that database triggers refuse to alter, and balances equal a replay of that log, which a test proves after random operations. Rules: [C16 to C18](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#money) and C39.
+
+## Text is only text
+
+Group names, member names and descriptions are rendered as plain text, never as HTML or markdown, and never inside a link or a page title. Control, bidirectional and zero-width characters are refused, except the joining characters that emoji and some scripts need. A content security policy limits scripts, styles, images and connections to Penny's own origin. Errors reveal nothing: no stack trace, SQL, connection string or token in any response, and `/api/health` says only up or down. Rules: [C25 and C28](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#rendering-limits-and-errors).
+
+## Calls to other services
+
+The only rate source is one fixed address, with no redirects, a time limit and a size cap, and an answer that fails its checks counts as "no rate". The checks page lists only the maintainer's pull requests, shows "passed" only for a status posted by TestSprite's GitHub App on the current head commit, and builds every link from validated parts. The GitHub token is read-only, scoped to this public repository and present only in production. Rules: [C19 to C24](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#upstream-calls). See [The TestSprite suite](../testing/testsprite-suite.mdx).
+
+## Limits that hold across servers
+
+Rate limits are rows in Postgres, so they hold across serverless instances. Group creation, sample trips, rate lookups, writes and reads each have a per-minute limit, with some per group as well. A group holds at most 20 members, 500 live expenses and 500 live payments, with larger caps on history. The exact settle-up search runs only up to 16 people with a balance. Every route and database statement has a time limit. Rule: [C26](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#rendering-limits-and-errors). The numbers are on the [API page](../developers/api.mdx).
+
+## The build pipeline
+
+No job that runs pull request code holds a secret. Preview databases hold synthetic data only, and the production database address and the GitHub token are scoped to production. The self-fix agent has file tools only, a separate job with no AI checks its patch, and a person merges every robot fix. Third-party actions are pinned to full commit ids, and the tools that hold secrets install at pinned versions without running install scripts. Rules: [C29 to C37](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#build-preview-and-ci). The details are on [Self-fix safety](./self-fix-safety.mdx).
+
+## What Penny does not defend against
+
+The threat model names these on purpose, so nobody has to guess.
+
+- Anyone who holds a group's link. They can do everything a member can, including deleting every expense. "Who did what" is self-reported, because "You are:" is a local choice, not proof.
+- Lookalike names, such as a Cyrillic letter inside "Bob".
+- Whether a payment really happened. Recording a payment is a claim, and Penny moves no money.
+- Rate accuracy. The suggested rate is the ECB daily reference rate, not what a bank charged. The rate you enter is the one that counts.
+- A compromised GitHub, Vercel, Neon, TestSprite or Anthropic, including the authenticity of the webhooks between them.
+- Whether TestSprite's verdict is right. A green check means TestSprite's tests passed, nothing more.
+- Privacy of pull request data on the checks page. It is already public on GitHub.
+- Denial of service beyond what the hosting platform absorbs.
+- The runtime changing the schema. The app connects as the database owner role that Neon's integration provides, so code running as the app could change the schema or drop the triggers that keep events append-only. The triggers stop a bug or a stray statement, not the owner.
+- Inline script under the content security policy. The policy allows inline scripts because Next.js inlines its own bootstrap scripts into prerendered pages. Injected markup is stopped by React's escaping and the control-character refusal, not by the policy.
+- A malicious maintainer.

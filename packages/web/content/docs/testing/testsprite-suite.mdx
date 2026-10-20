@@ -1,0 +1,82 @@
+---
+title: "The TestSprite suite"
+description: "The 21 browser tests that run on every pull request, how they are written, and how the required check holds the merge."
+---
+
+TestSprite is a testing service that drives a real browser. For every pull request to Penny it opens that pull request's own preview and runs 21 tests against it. GitHub will not merge the pull request until TestSprite's check is green.
+
+## The 21 tests
+
+The names are TestSprite's own, as listed in its [comment on pull request #10](https://github.com/ramakrishnanhulk20/penny/pull/10#issuecomment-6284111373).
+
+| Area | Test |
+| --- | --- |
+| Groups and members | Create a group with two members. |
+| Groups and members | Create a three-person group in GBP. |
+| Groups and members | Refuse to create a group with no name and no members. |
+| Groups and members | Refuse two members whose names differ only in letter case. |
+| Groups and members | Add a member and remove them again. |
+| Groups and members | Lock the base currency once money is recorded. |
+| Groups and members | Reset the group link and get a new one. |
+| Splitting | Split 100.00 EUR equally three ways to the cent. |
+| Splitting | Split by shares with one person left out. |
+| Splitting | Exact amounts must add up before an expense is saved. |
+| Splitting | Split a yen expense with no decimals. |
+| Splitting | Expense form refuses a missing description and too many decimals. |
+| Currency | Convert a yen hotel bill into euros at a typed rate. |
+| Currency | Fill in the ECB reference rate for a foreign expense. |
+| Correcting expenses | Edit an expense and the balances follow. |
+| Correcting expenses | Delete an expense only after confirming. |
+| Balances and settling | Two opposite expenses settle everyone to zero. |
+| Balances and settling | Settle a four-person trip in two payments. |
+| Balances and settling | Open a sample trip with exact balances and a three-payment plan. |
+| Balances and settling | Mark payments as paid until everyone is settled. |
+| Balances and settling | Undo a payment and the debt comes back. |
+
+That is 7 tests on groups and members, 5 on splitting, 2 on currency, 2 on correcting expenses and 5 on balances and settling.
+
+## How the tests are written
+
+- Fixed data. Names, amounts, currencies and rates are chosen in advance, so the right answer is known before the test runs.
+- Exact expected text. A test checks what is written on the page, not just that the page loaded. Examples: "33.34" for the leftover cent, "155.74 EUR" for a balance, and "3 payments settle 7 expenses." for the sample trip.
+- Each test makes its own group. Every test starts from the home page and creates a fresh group, so tests never share state and a failure points at one behaviour. No test depends on a fixed production group, because anyone can edit a group whose link appears in a public test file or report.
+- No back door. Production has no seed, reset or bypass endpoint, flag or header for tests. TestSprite's browsers get exactly what an anonymous visitor gets.
+
+## What happens on a pull request
+
+1. A commit is pushed to a pull request branch.
+2. Vercel builds a preview. The preview uses its own Neon database branch, copied from the preview database, which holds synthetic data only.
+3. TestSprite tests that preview and posts a commit status named `TestSprite V3` on the commit. It is pending while the tests run, then success or failure. The status text reads "All 21 tests passed" or, for a failure, "18/21 passed, 3 failed".
+4. When the pull request closes, the `neon-cleanup` workflow deletes its database branch.
+
+The whole sequence is drawn on [the self-fixing loop page](./self-fixing-loop.mdx).
+
+## The check holds the merge
+
+The branch rule on `main` requires a pull request, applies to administrators, and blocks force pushes and deletion. Two commit statuses must be green before GitHub allows a merge.
+
+| Required check | Posted by | Pinned to | Meaning |
+| --- | --- | --- | --- |
+| `TestSprite V3` | TestSprite's GitHub App | App id 2756476 | The 21 browser tests passed on this pull request's preview |
+| `maintainer-review` | The `maintainer-review` workflow | GitHub Actions (app id 15368) | Green at once if no robot commit exists; otherwise pending until the `reviewed` label is added after the last one |
+
+Each check is pinned to its source. A job that borrows either name cannot satisfy the rule. The `ci` workflow (typecheck, lint, unit tests) also runs on every pull request, but it is not a required check.
+
+## The checks page
+
+The [checks page](/checks), headed "How Penny is tested", shows the same facts from inside the product, read live from GitHub.
+
+- "Live right now" says which commit this site runs, for example "This site runs commit f18a91e from pull request #14.", which it said on 20 October 2026 after that pull request merged.
+- "Recent pull requests" lists the 12 newest pull requests opened by the maintainer. Each shows its number and title, its state, the TestSprite line, and links to "Pull request" and "Test report". The TestSprite line reads like "TestSprite: passed, 21 of 21" or "TestSprite: failed, 18 of 21 passed, 3 failed".
+- A line at the bottom, such as "Read from GitHub at 05:31 UTC.", says when the data was fetched. If GitHub did not answer, the page keeps the last good read and says so.
+
+The verdict is one of passed, failed, blocked, running, not run or unknown. The page is strict about "passed":
+
+- It shows "passed" only when TestSprite's GitHub App posted the status, on the pull request's current head commit, as exactly `success`. A same-named status from anyone else does not count.
+- If the counts cannot be read from the status text, the verdict is unknown and the counts are blank. They are never shown as zero.
+- A `success` with no passed test and some blocked tests shows as blocked, because nothing was shown to work. Blocked tests are always counted in the line.
+- The report link appears only if it is an https address on TestSprite's own report host.
+
+## What the suite does not cover
+
+A green check means TestSprite's tests passed, nothing more. The 21 tests cover groups, splitting, currency, corrections and settling in a browser, against a preview with synthetic data. They say nothing about how the home page looks or animates. Message wording for every server error code, limits, rate limiting and the database rules are covered by the unit and database tests on [Unit and property tests](./unit-and-property-tests.mdx), not by these.

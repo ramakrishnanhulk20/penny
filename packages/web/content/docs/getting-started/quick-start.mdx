@@ -1,0 +1,43 @@
+---
+title: "Quick start"
+description: "Open the live app, try the sample trip, then start a group of your own. Five minutes, no account."
+---
+
+You need a browser and nothing else. This page uses the live app at [penny-self.vercel.app](https://penny-self.vercel.app). To run Penny on your own machine, see [Run it locally](./run-locally.mdx).
+
+## Try the sample trip
+
+1. Open the home page. The headline reads "Split shared costs to the penny." Press "Try a sample trip". The button shows "Making your sample trip..." for a moment, then the group opens.
+2. You land on the "Lisbon trip" group. It is a new copy every time, so nothing you do touches anyone else's. It has four people (Ana, Ben, Cy, Dev), seven expenses in euros, and one of them, a surf lesson, in US dollars.
+3. Read the "Balances" section. You should see:
+   - "Ana is owed 155.74 EUR"
+   - "Ben is owed 81.34 EUR"
+   - "Cy owes 95.15 EUR"
+   - "Dev owes 141.93 EUR"
+   - "Total: 0.00 EUR"
+4. Read the "Settle up" section. You should see three lines and the proof line under them. The order of the lines can differ between groups.
+   - "Cy pays Ana 13.81 EUR"
+   - "Cy pays Ben 81.34 EUR"
+   - "Dev pays Ana 141.93 EUR"
+   - "3 payments settle 7 expenses."
+5. Press "Mark as paid" on one line. It moves into the "Payments" list, and the balances and the plan change at once. Press "Undo" and the line comes back.
+6. In the "Expenses" list, press "Edit" on "Surf lesson". The form is headed "Edit expense" and holds 150.00 USD at the rate 0.92. The list shows "= 138.00 EUR at 0.92" under the expense. Press "Cancel" to leave it unchanged.
+7. Press "Copy link". The page says "Link copied". Paste the link into a private window and the same group opens, because the secret after `#` is the key.
+
+The sample trip is a real group. Anyone who holds its link can change it, so treat it like any group you share.
+
+## Start a group of your own
+
+1. Go back to the home page and press "Start a group". You arrive at the page with the fields "Group name", "Base currency" and "Members".
+2. Type a group name, for example "Flat 4B". Leave "Base currency" on EUR or pick another. This is the currency every balance is shown in.
+3. Type two member names. The form starts with two name fields. Press "Add member" for each extra person, up to 20, and "Remove" to drop a field.
+4. Press "Create group". The group page opens with a banner: "Group created. Share this link with your group:", followed by the full link and a "Copy link" button.
+5. Under "Add an expense", fill in "What was it for?", "Amount", "Paid by" and a split, then press "Add expense". The expense appears at the top of the list, and the balances and the settle-up plan update.
+
+What you should see after one expense of 12.00 EUR paid by Ana and split equally between Ana and Ben: "Ana is owed 6.00 EUR", "Ben owes 6.00 EUR", the plan "Ben pays Ana 6.00 EUR" and the line "1 payment settles 1 expense."
+
+## What to read next
+
+- [Start a group](../guides/start-a-group.mdx) and [Add an expense](../guides/add-an-expense.mdx) cover every field and every message.
+- [How it works](../concepts/how-it-works.mdx) explains why the numbers always add up.
+- [The group link](../concepts/the-group-link.mdx) explains why there is no sign-in and what a link holder can do.

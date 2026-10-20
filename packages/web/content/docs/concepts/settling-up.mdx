@@ -1,0 +1,57 @@
+---
+title: "Settling up"
+description: "How Penny finds the fewest payments that bring every balance to zero, when it is exact, when it falls back to a simpler rule, and why every plan is checked."
+---
+
+## Balances first
+
+A balance is what the group owes a member. A positive balance is money owed to them, shown as "Ana is owed 155.74 EUR". A negative balance is money they owe, shown as "Cy owes 95.15 EUR". A zero balance reads `<Name> is settled up`, with the person's name in place of `<Name>`.
+
+The balances of a group always add up to exactly 0.00, because every expense credits the payer and debits the participants by the same total. Under the list, the page shows "Total: 0.00 EUR".
+
+## The goal
+
+Settle up lists payments that bring every balance to exactly zero, using as few payments as possible. Each line reads `<From> pays <To> <amount> <BASE>`, for example "Dev pays Ana 141.93 EUR". Under the list is the proof line, "3 payments settle 7 expenses.", or "1 payment settles 1 expense." for one. When everyone is at zero it reads "Everyone is settled up."
+
+## The fewest payments, exactly
+
+Here is the idea behind the minimum. A group of n people who owe each other can always settle in n - 1 payments. But if a smaller circle of people already balances among themselves (their balances add up to zero), that circle can settle on its own with fewer payments. The fewest payments overall is the number of people with a balance, minus the largest number of such circles the group can be split into.
+
+Penny searches for that split. With up to 16 people who have a balance, the search is exact, so the plan has the fewest payments possible. The work doubles with each extra person: about a million steps at 16 people, which takes milliseconds, and twice that at 17. That is why 16 is the limit.
+
+The count is of people with a non-zero balance. Someone who is settled up does not count.
+
+### The Lisbon trip
+
+The balances are Ana +155.74, Ben +81.34, Cy -95.15 and Dev -141.93. Four people need at most three payments. Two payments would be enough only if the four split into two circles that each add up to zero. Checking every pair: Ana and Ben add up to 237.08, Ana and Cy to 60.59, Ana and Dev to 13.81, Ben and Cy to -13.81, Ben and Dev to -60.59, Cy and Dev to -237.08. None is zero, so three is the fewest.
+
+The plan: Cy pays Ana 13.81, Cy pays Ben 81.34, and Dev pays Ana 141.93.
+
+## Above 16 people: the greedy rule
+
+A group holds at most 20 members, so a group can have more than 16 people with a balance. Above 16, Penny uses the greedy rule: the person who owes the most pays the person who is owed the most, the smaller of the two amounts, and this repeats until everyone is at zero.
+
+Every payment settles at least one person, so a greedy plan always has fewer payments than there are people with a balance. It is not always the fewest.
+
+### When greedy takes one more
+
+Take five people: Ana +6.00, Ben -4.00, Cy -2.00, Dev +5.00 and Eli -5.00.
+
+- The exact search finds three payments: Ben pays Ana 4.00, Cy pays Ana 2.00, and Eli pays Dev 5.00. Ana, Ben and Cy balance among themselves, and so do Dev and Eli.
+- The greedy rule takes four: Eli pays Ana 5.00, Ben pays Dev 4.00, and then Cy has to pay 1.00 to each of Ana and Dev.
+
+Penny runs the exact search for this group because only five people have a balance. The greedy rule is only for the larger groups.
+
+## The plan is checked before you see it
+
+Before a plan leaves the money engine, Penny applies it to the balances and confirms everyone ends at exactly zero. A plan that fails the check is an error, not an answer. A bug in the search can therefore stop a plan from appearing, but it cannot show you a plan that leaves someone owing.
+
+The plan is the same whatever order the balances arrive in: ties go to the member with the lower internal id, and the lines are sorted by payer, then payee. The order of the lines can differ between two groups with the same names, because the ids are different.
+
+The engine's tests check the exact search against an independent exhaustive search, and check that it is never worse than the greedy plan. See [Unit and property tests](../testing/unit-and-property-tests.mdx).
+
+## After a payment
+
+"Mark as paid" records one payment between two members, in the base currency, and the balances and the plan are recomputed at once. The new plan can differ from the old one, because it is the fewest payments for the balances as they stand now. "Undo" removes the payment and the debt comes back. The steps are in [Settle up](../guides/settle-up.mdx).
+
+Recording a payment is a claim. Penny moves no money, and it cannot tell whether a payment really happened.

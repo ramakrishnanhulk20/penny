@@ -1,0 +1,98 @@
+---
+title: "Self-fix safety"
+description: "Which job holds which secret, what the patch checker refuses, how the review gate keeps a person on every robot fix, and what the design does not defend against."
+---
+
+The danger in the [self-fixing loop](../testing/self-fixing-loop.mdx) is plain: an AI agent reads text that came from a web page, inside a pipeline that holds secrets and can push code. The rules on this page exist so that nothing in a pull request, and nothing in a failure report, can get code merged on its own, and so that the agent never holds a secret.
+
+They do not make every secret unreachable. A self-fix commit is deployed to a public preview before the maintainer reads it, so a patch that slipped past the checker could expose the preview database credential. That limit is described under [What it does not defend against](#what-it-does-not-defend-against).
+
+The rules are invariants C31 to C37 in the [threat model](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md). The full text is [docs/security/self-fix.md](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/self-fix.md).
+
+## Which job holds which secret
+
+| Job | Secrets | GitHub token permissions | Runs pull request code? |
+| --- | --- | --- | --- |
+| gate | none | read contents, pull requests, Actions runs | no |
+| failures | `TESTSPRITE_API_KEY`, in one step only | read contents | no |
+| fix | `CLAUDE_CODE_OAUTH_TOKEN`, in the agent's step only | read contents, and the token is not saved into the checkout | no: the agent has no shell, so it can only read and edit files |
+| push | none | write contents, write pull requests, write commit statuses | no |
+| review-gate, in `maintainer-review.yml` | none | read contents, pull requests and issues, write commit statuses | no: it runs the default branch's copy of the gate |
+
+Every job starts from no permissions and asks for only what it uses. Third-party actions are pinned to full commit ids. The TestSprite command line and Claude Code are installed with `npm ci` from a lockfile that pins every package, including the ones they depend on, by version and integrity hash, with install scripts turned off. `ANTHROPIC_API_KEY` is never set.
+
+## What the agent can and cannot do
+
+- It has file tools only: read, edit, write and search. No shell, no web, no MCP servers.
+- It cannot read its own token. With no shell it cannot print its environment, its file tools are confined to the checkout, reads under `/proc` and the home folder are denied, and hooks, project settings, MCP servers and `CLAUDE.md` files are all switched off.
+- It checks out exactly the commit TestSprite tested, after every agent instruction and settings file has been deleted from it. Git runs commands named in its own config, so the git folder is moved outside the agent's reach.
+- Its edits are allowed only inside the checkout, and every edit under the home folder is denied. A bare permission to edit would let the agent write anywhere on the runner, because Claude Code fences reads outside the working folder but has no such setting for writes.
+- Failure details reach it as a data file marked untrusted. A TestSprite run counts as evidence only if it targeted this preview, started after the tested commit was made, and started within the two hours before the failing status.
+- Its instructions and settings come only from the workflow on the default branch, never from the pull request.
+- Only one agent runs per pull request at a time. The log shows the turn count and cost only, never the conversation.
+
+These limits are proven on a real runner by the sandbox self-test. Its output is on [Unit and property tests](../testing/unit-and-property-tests.mdx).
+
+## The four gates
+
+The self-fix acts only when all four hold. Any doubt, including any GitHub API error, means it does nothing.
+
+1. The verdict is TestSprite's. The status is named exactly `TestSprite V3`, its state is exactly `failure`, and it was posted by TestSprite's bot account (user id 258111874). A status with the same name from anyone else is ignored.
+2. The pull request is the maintainer's and has not moved. Exactly one open pull request has this commit as its head. Its branch lives in this repository, not a fork, and is not `main`. Its author is the maintainer, matched by login and by GitHub's numeric user id. Its head is still the tested commit when the run starts.
+3. Fewer than two attempts so far on this pull request. An attempt is a run whose fix job started, whatever happened next: a refused patch, an agent error or a cancelled run all count.
+4. Fewer than six attempts today across the repository, counted since midnight UTC. Several pull requests that fail within the same minute can each start before the count moves, so the overshoot is bounded by the number of the maintainer's open pull requests.
+
+If the counts cannot be read in full, the self-fix does not run.
+
+## What the patch checker allows
+
+The checker runs twice: in the fix job, and again in the push job, which runs no pull request code and no AI. A refused patch is never uploaded or pushed.
+
+Only `.ts`, `.tsx` and `.css` files under these two folders may change, and everything else is denied by default:
+
+- `packages/web/src/**`
+- `packages/core/src/**`
+
+Never these, even inside those folders:
+
+- the security modules: `group-token.ts`, `groups.ts`, `rate-limit.ts`, `http.ts`, `env.ts`, `text.ts`, `api-schemas.ts` under `packages/web/src/lib/`, and everything under `packages/web/src/db/`
+- a new file that could be loaded in place of a security module, such as `groups.tsx`, `group-token.js` or a folder `lib/groups/index.ts`. The bundler tries `.js` before `.ts`, so a new `groups.js` would win over `groups.ts` at build time while the type checker still reads `groups.ts`.
+- a new route handler, middleware, proxy or instrumentation file anywhere
+- tests: any `*.test.*` or `*.spec.*` file and any `__tests__` folder
+- config, package and lock files
+- agent instruction files (`CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`)
+- anything in a `node_modules` folder, and any file or folder whose name starts with a dot, such as `.env*`, `.git`, `.github` and `.claude`
+
+The patch is also refused for:
+
+- any rename, copy, deletion, file mode change or binary file
+- more than 200 changed lines, or more than 200,000 bytes
+- a file path or an added line that looks like a secret: `sk-`, GitHub token prefixes, `-----BEGIN`, this workflow's secret names, or a long hex or base64 run
+- an added line holding an invisible or text-direction character
+- an added line that reaches for the environment: `process`, `globalThis`, `serverEnv`, `DATABASE_URL`, `connectionString`, `import.meta`, `constructor`, `$client`, `global.` or `global[`, a `"use server"` directive, a call to `eval`, `Function`, `require` or a dynamic `import(`, or a quoted module path ending in `/env`. The words are matched anywhere in the line, comments and text included.
+- anything the checker cannot parse with certainty
+
+Before applying, the checker confirms that git reads the patch the same way it does: same files, same line counts. The comment on the pull request lists at most 30 changed files, then says how many more there are.
+
+## Who merges
+
+A person merges every pull request that carries a self-fix commit, after reading the change. The required `maintainer-review` status holds the merge until the maintainer adds the `reviewed` label.
+
+- A robot commit is one whose author or committer is `github-actions[bot]`, whose author email is that bot's address, or whose message starts with `self-fix: `. Any one is enough.
+- The label counts only if it is on the pull request now, GitHub's record shows the maintainer added it later than the newest robot commit's commit time, and nobody has removed it since.
+- The gate runs the default branch's copy of its script, so a pull request cannot change the rule it is judged by. The robot cannot change the workflow file either, because the checker refuses any path under `.github`.
+- The required check is the `maintainer-review` status, never the job. The job is named `review-gate` because a job with the status's name would satisfy the check by its name alone.
+- It fails closed. A GitHub API error, an answer it cannot read, or a pull request with 250 or more commits ends the run with no status posted. A commit with no status cannot merge, and re-running the job recovers.
+- A pull request from a fork gets a read-only token, so the gate cannot post a status on it and the required check stays unmet.
+
+The required `TestSprite V3` check is pinned to TestSprite's app in the branch rules, so a job with the same name cannot satisfy it.
+
+## What it does not defend against
+
+- A compromised TestSprite, GitHub, Vercel, Anthropic or npm registry. The loop trusts TestSprite's bot account and GitHub's record of who posted a status.
+- A fix that is wrong but passes. A green check means TestSprite's tests passed, nothing more. That is why a person merges.
+- A malicious maintainer, who can change the workflow, the checker and the branch rules.
+- A patch that reaches the preview database credential by a route the checker does not name. The preview's server holds `DATABASE_URL` for `penny-preview`, and a patch that slipped past the checker could serve it to anyone who opens the preview. The credential belongs to `penny-preview` only, never to production, and that database holds synthetic data. The checker matches known shapes. It does not prove a patch harmless. Not caught, for example: the global object reached through `[].constructor.constructor`, a dynamic `import()` of a built-up path, an identifier written with escapes, or the database client's own settings read through `withDb`.
+- Secrets hidden in shapes the checker does not name, such as a key split across several lines. The agent never holds a secret it could leak this way, so this check is a second line, not the first.
+- Readers of the Actions tab. On a public repository, the failure bundles and the patch can be downloaded by any signed-in GitHub user for one day. The bundles are captures of the preview, which runs on synthetic data.
+- Unit tests on the self-fix commit. GitHub does not start other workflows for a push made with a workflow's own token, so the `ci` workflow does not run on a self-fix commit by itself. Closing and reopening the pull request runs it before the merge.

@@ -1,0 +1,39 @@
+---
+title: "Share and reset"
+description: "Share a group with its link, cut off a link that leaked, and what happens if the connection drops in the middle of a reset."
+---
+
+## Share the group
+
+The link is the only way into a group. Anyone who has it can open the group and change it, so send it to the people in the group and nobody else. What a link holder can do is listed on [The group link](../concepts/the-group-link.mdx).
+
+1. At the top of the group page, press "Copy link".
+2. The page says "Link copied". If the browser refuses to use the clipboard, nothing changes on the page, because saying "Link copied" would be untrue. Select the address in the address bar and copy it by hand.
+3. Paste the link into a message. Whoever opens it sees the same group.
+
+Right after a group is created, a banner also shows the link in a field: "Group created. Share this link with your group:", with its own "Copy link" button.
+
+Each person should pick their name under "You are:" the first time. The choice is remembered on that device only, and it pre-selects "Paid by" when they add an expense.
+
+## Reset the link
+
+Reset the link when it has gone somewhere it should not have, for example into a public chat. The old link stops working for everyone.
+
+1. Press "Reset link" at the top of the group page.
+2. The page asks "Make a new link? The old link will stop working for everyone." with the buttons "Make new link" and "Cancel".
+3. Press "Make new link". The page shows "New link made. The old link no longer works. Share this one:", followed by the new link and a "Copy link" button.
+4. Send the new link to the people who should keep access. Anyone using the old link now sees "This link doesn't open a group. It may have been reset. Ask the group for the current link."
+
+A reset keeps all the expenses, payments and members. Only the key changes.
+
+A group can always reset its link, even a full one, so a leaked link can always be cut off. Resets are limited to 120 a minute per group.
+
+## If the connection drops during a reset
+
+The browser makes the new secret itself, and keeps it in this tab's session storage before it asks the server to switch. That way the server's answer does not carry a secret that could be lost.
+
+- If the answer is lost or the request times out, the page sends the same reset a second time. Sending it again is safe.
+- If that fails too, the page checks whether the new link already opens the group. If it does, the reset had landed, and the page shows the "New link made" message as above.
+- If all three tries fail, the new link waits in that tab's session storage. When the page later meets a dead link, it tries up to five kept links before showing the not-found page, and uses the first one that opens the same group.
+
+This covers one lost answer, or both sends failing while the reset landed. It does not cover a different tab or device, or a cleared session storage. If the old link stopped working and the new one never reached you, ask the person who reset the group.

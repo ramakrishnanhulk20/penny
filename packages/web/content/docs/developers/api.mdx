@@ -1,0 +1,68 @@
+---
+title: "API"
+description: "Every route Penny serves, with its authentication, rate limit, success answer and error codes."
+---
+
+Every group route reads the group from the `x-penny-group` header, which holds the 22-character link secret. An unknown, malformed or reset secret, and any id that belongs to another group, all get the same `404 {"error":{"code":"not_found"}}`.
+
+Every error body is `{"error":{"code":"..."}}` with no other detail. Every POST, PATCH and DELETE must declare `Content-Type: application/json`, even with no body (otherwise 415 `unsupported_media_type`), and a body is at most 16 KiB. Any other failure is a bare 500 `internal`.
+
+Money in the API is always text: an amount such as `"12.50"`, a rate such as `"0.92"`. Amounts and rates follow the rules on [Exact to the cent](../concepts/exact-to-the-cent.mdx) and [Currencies and rates](../concepts/currencies-and-rates.mdx).
+
+## Limits
+
+Limits count per minute. Past a limit the answer is 429 `rate_limited` with `Retry-After: 60`.
+
+| Limit | Allowed |
+| --- | --- |
+| create | 60 group creations per client network |
+| sample | 10 sample trips per client network |
+| fx | 60 rate lookups per client network |
+| write | 600 writes per client network and 120 per group |
+| read | 600 reads per client network (the group read and `/api/checks`), and 240 per group for the group read |
+
+A client network is stored only as an HMAC under a server-side key, never as an address.
+
+## Routes
+
+Each row names the limit that applies, from the table above. The last column lists the errors besides 404, 415, 429 and 500.
+
+### Routes that need no secret
+
+| Route | What it does | Success | Errors |
+| --- | --- | --- | --- |
+| `POST /api/groups` | Start a group. Body: `name`, `baseCurrency`, `members` (2 to 20). Limit: create. | 201 `{token, group}`. The token is returned only here. | 400 `invalid_body`, `bad_name`, `bad_currency`, `too_few_members`, `too_many_members`, `bad_member_name`, `duplicate_member_name` |
+| `POST /api/sample-trip` | Make a new sample group. Reads no input. Limit: sample. | 201 `{token, group}` | None |
+| `GET /api/fx?from=EUR&to=USD` | The latest ECB reference rate for a pair. Limit: fx. | 200 `{rate, date, source}` | 400 `invalid_body`; 404 `no_rate` (never a default rate) |
+| `GET /api/checks` | The live commit and TestSprite verdicts on recent pull requests. If GitHub did not answer, the last good read with `stale: true`. Limit: read. | 200 snapshot | 503 `unavailable` when there is no good read to show |
+| `GET /api/health` | Whether the database answers. No limit. | 200 `{"status":"up"}` | 503 `{"status":"down"}` |
+| `GET /api/search` | Search the in-product docs. It reads only the docs index, never the database. No limit. | 200 results | None |
+
+### Group routes, with the secret in `x-penny-group`
+
+| Route | What it does | Success | Errors |
+| --- | --- | --- | --- |
+| `GET /api/group` | Read the group: members, balances, plan, expenses, payments. Limit: read. | 200 group view | None |
+| `PATCH /api/group` | Change the base currency. Body: `baseCurrency`. Limit: write. | 200 `{group}` | 400 `invalid_body`, `bad_currency`; 409 `base_locked`, `limit_reached` |
+| `POST /api/group/expenses` | Add an expense. Body: `clientId`, `description`, `amount`, `currency`, `rate`, `paidBy`, `split`. Limit: write. | 201 `{expense, group}`. 200 with the original for a repeated `clientId` and body. | 400 expense codes; 409 `client_id_conflict`, `limit_reached` |
+| `PATCH /api/group/expenses/{expenseId}` | Edit an expense from the version you saw. Body: `version` and the expense fields. Limit: write. | 200 `{expense, group}` | 400 expense codes; 409 `stale_version`, `limit_reached` |
+| `DELETE /api/group/expenses/{expenseId}?version=N` | Delete an expense from the version you saw. Limit: write. | 200 `{group}` | 400 `invalid_body`; 409 `stale_version`, `limit_reached` |
+| `POST /api/group/members` | Add a member. Body: `name`. Limit: write. | 201 `{member, group}` | 400 `invalid_body`, `bad_member_name`, `duplicate_member_name`; 409 `too_many_members`, `limit_reached` |
+| `DELETE /api/group/members/{memberId}` | Remove a member with a zero balance and no history. Limit: write. | 200 `{group}` | 409 `member_in_use`, `too_few_members`, `limit_reached` |
+| `POST /api/group/payments` | Record a payment. Body: `clientId`, `planVersion`, `from`, `to`, `amount`, `currency`, `rate`. Limit: write. | 201 `{payment, group}`. 200 with the original for a repeated `clientId` and body. | 400 payment codes; 409 `client_id_conflict`, `stale_version`, `limit_reached` |
+| `DELETE /api/group/payments/{paymentId}` | Undo a payment. Limit: write. | 200 `{group}` | 409 `limit_reached` |
+| `POST /api/group/reset-link` | Move the group to a new link. Body: `newToken`, made by the browser. Limit: write. | 200 `{group}`. The same answer when a lost reset is sent again. | 400 `invalid_body`. Never 409: a full group can still cut off a leaked link. |
+
+The retry rule for creates: a repeated `clientId` with the same body returns the original and writes nothing. The same `clientId` with a different body is refused with 409 `client_id_conflict`.
+
+## Error codes
+
+Expense codes: `invalid_body`, `bad_description`, `bad_currency`, `amount_format`, `amount_too_many_decimals`, `amount_zero`, `amount_too_large`, `rate_format`, `rate_too_precise`, `rate_zero`, `rate_out_of_range`, `rate_required`, `rate_forbidden`, `converts_to_zero`, `base_too_large`, `split_empty`, `split_duplicate_member`, `split_bad_weight`, `split_too_many_parts`, `split_exact_sum_mismatch`, `split_bad_amount`.
+
+Payment codes: `invalid_body`, `bad_currency`, the `amount_` and `rate_` codes above, `converts_to_zero`, `base_too_large` and `self_payment`.
+
+The browser turns every code into a sentence of its own. The sentences are on the guides: [Add an expense](../guides/add-an-expense.mdx), [Start a group](../guides/start-a-group.mdx) and [Fix a mistake](../guides/fix-a-mistake.mdx).
+
+## Types
+
+The data model is on [Architecture](./architecture.mdx). The request and response types are in [packages/web/src/lib/api-types.ts](https://github.com/ramakrishnanhulk20/penny/blob/main/packages/web/src/lib/api-types.ts), and the request schemas, which reject unknown fields, are in [packages/web/src/lib/api-schemas.ts](https://github.com/ramakrishnanhulk20/penny/blob/main/packages/web/src/lib/api-schemas.ts).

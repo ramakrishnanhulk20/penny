@@ -1,0 +1,58 @@
+---
+title: "FAQ"
+description: "Short answers about privacy, lost links, settle-up plans, currencies, accounts, the tests and the robot fix."
+---
+
+## Is my data private?
+
+A group can be read only with its link. The link is 128 random bits and the server stores only a hash of it. Group pages are marked `noindex`, send no referrer and load no third-party scripts. The names and amounts are stored as ordinary rows in a Neon Postgres database, and anyone who holds the link sees everything in the group, so share it only with the people in the group.
+
+## What if I lose the link?
+
+There is no recovery. The server stores only a hash of the secret, so it cannot show you the link, and there is no account to prove you belong to the group. Ask anyone else in the group to send it again, or look in the history of a browser that opened it. If nobody has it, start a new group.
+
+## Why is the settle plan different from my maths?
+
+Settle up does not repeat who paid for what. It finds the fewest payments that bring every balance to exactly zero, so you may pay someone who did not pay for you. In the Lisbon trip, Cy owes 95.15 EUR and pays it as 13.81 to Ana and 81.34 to Ben. If your own total differs by one cent, the cause is usually rounding: Penny gives the leftover cent to the person listed first.
+
+## Why does a payment say "This was already changed"?
+
+The page you were looking at was behind. Someone else paid, undid or changed the same thing first, or you pressed the button on a second phone. Penny loads the latest group and shows "This was already changed. Showing the latest." so that nothing is recorded twice. Check the new plan and press the button again if the line is still there.
+
+## Which currencies?
+
+Any of the 165 currencies in the ISO 4217 table that have a defined minor unit, from JPY with no decimals to KWD with three. Codes such as XAU have none and are refused. The suggested exchange rate comes from the European Central Bank's daily reference rates, for the pairs it publishes. For any other pair you type the rate yourself.
+
+## Does it move money?
+
+No. Recording a payment is a claim that it happened, and Penny cannot check it. Pay each other however you like, then press "Mark as paid" so the balances catch up.
+
+## Why no accounts?
+
+Splitting a trip should not need a sign-up. The link is the key, and it opens one group and nothing else. The cost is that anyone with the link can do everything a member can, and "who did what" is self-reported. Use "Reset link" to cut off someone who should not have it.
+
+## How do you know the tests are worth anything?
+
+The planted bug in pull request #10 moved one cent, and 3 of the 21 browser tests failed. The browser tests check exact values such as "33.34", not that a page loaded. The money engine's tests catch 91.19 percent of the deliberate breaks that StrykerJS makes, when last run. The testing pages also list what the tests do not cover.
+
+## Can a bot merge code?
+
+No. The agent that writes a fix has no push credential. A separate job with no AI checks its patch and pushes it to the pull request branch only. GitHub then refuses to merge until the maintainer adds the `reviewed` label, so a person reads and merges every robot fix.
+
+## What happens when a test fails?
+
+GitHub will not merge the pull request, because `TestSprite V3` is a required check. If the pull request is the maintainer's, the self-fix loop makes up to two attempts to repair it, and each repair is tested again on a new preview. A pull request that is still red after that waits for a person.
+
+## Who gets the leftover cent?
+
+The person listed first. When a cost cannot divide evenly, each person gets their share rounded down, and the leftover cents go one each to the largest fractions, with ties going to whoever was added to the group first. 100.00 split three ways is 33.34, 33.33 and 33.33.
+
+## Why can't I remove a member?
+
+A member can be removed only when their balance is zero, they appear in no expense or payment (deleted ones included), and the group has more than two members. This keeps every sum complete, because removing someone with history would change the past. If the button is not there, one of those three is not true.
+
+## Where to read more
+
+- [How it works](./concepts/how-it-works.mdx) and [Exact to the cent](./concepts/exact-to-the-cent.mdx) for the numbers.
+- [The self-fixing loop](./testing/self-fixing-loop.mdx) and [Self-fix safety](./security/self-fix-safety.mdx) for the robot fix.
+- [Security overview](./security/overview.mdx) for what Penny does and does not defend against.

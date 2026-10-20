@@ -18,7 +18,7 @@ export default function Layout({ children }: LayoutProps<"/docs">) {
       themeSwitch={{ enabled: false }}
       sidebar={{ prefetch: false }}
       links={[
-        { text: "Penny", url: "/" },
+        { text: "Open the app", url: "/" },
         { text: "Checks", url: "/checks" },
       ]}
     >

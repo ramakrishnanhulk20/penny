@@ -1,0 +1,41 @@
+---
+title: "Penny"
+description: "Split shared costs to the penny. What Penny does, why its numbers are exact, how every change is tested and how the robot fix is kept safe."
+---
+
+Penny is an English word for the smallest coin. Here it means splitting shared costs to the last one.
+
+Four friends go to Lisbon. One pays the flights in euros, another the apartment, one a surf lesson in dollars. Splitting 100.00 three ways leaves a cent that belongs to nobody. By the end there are seven receipts and a tangle of who owes whom.
+
+Penny turns that into a short list. You add what each person paid. Penny splits every expense down to the smallest unit of its currency, converts foreign ones once at a rate you can see and change, and works out the fewest payments that bring everyone to exactly zero. There is no account to make: a group is opened by its private link.
+
+The Lisbon trip is built in. Press "Try a sample trip" on the [home page](/) and you get all seven expenses and a plan of three payments: Cy pays Ana 13.81, Cy pays Ben 81.34 and Dev pays Ana 141.93. The line under the plan reads "3 payments settle 7 expenses."
+
+## Four promises
+
+Each promise is a rule the product keeps on every screen, and each one has tests behind it.
+
+1. Every amount is exact. Amounts are stored as whole numbers of the currency's smallest unit. A split always adds up to the expense, in its own currency and in the base currency. Nothing is rounded except a currency conversion, which rounds once per expense, half up.
+2. Everyone ends at exactly zero. The balances of a group add up to exactly 0.00. Applying the settle-up payments brings every member to zero, using the fewest payments possible for up to 16 people with a balance.
+3. Nothing is recorded twice. Pressing "Add expense" twice, or a dropped connection that retries, never adds an expense twice. "Mark as paid" on an out-of-date page, such as a second phone, never records a payment twice.
+4. A link opens one group. One group's link can never read or change another group. After "Reset link", the old link opens nothing.
+
+## Where to go next
+
+- [Quick start](./getting-started/quick-start.mdx): try the sample trip in the live app, then start a group of your own.
+- [How it works](./concepts/how-it-works.mdx): the path a typed amount takes to become a balance and a payment, with the Lisbon numbers.
+- [The self-fixing loop](./testing/self-fixing-loop.mdx): how a planted bug went from red to green in 4 minutes 44 seconds, and why a person still merges every robot fix.
+
+The rest of the sidebar covers [concepts](./concepts/exact-to-the-cent.mdx), step-by-step [guides](./guides/start-a-group.mdx), the [test suite](./testing/testsprite-suite.mdx), the [API](./developers/api.mdx), [security](./security/overview.mdx) and the [FAQ](./faq.mdx).
+
+## One pull request, five lines
+
+Pull request [#10](https://github.com/ramakrishnanhulk20/penny/pull/10) plants a one-line bug on purpose: the leftover cent of a split goes to the last person listed instead of the first, so 100.00 split three ways comes out as 33.33, 33.33 and 33.34. All times are UTC, 20 October 2026.
+
+- **05:02** The bug is pushed and the pull request opens. At 05:23 Vercel's preview is live and TestSprite starts its 21 browser tests against it.
+- **05:27:08** TestSprite posts `TestSprite V3: failure`, "18/21 passed, 3 failed". The branch rule requires that check, so GitHub will not merge.
+- **05:27:09** The self-fix run starts. Its commit lands at 05:28:29, 81 seconds after the red, and changes one line to undo the planted flip.
+- **05:31:52** TestSprite tests the new preview: "All 21 tests passed". Red to green took 4 minutes 44 seconds, with no person involved.
+- **05:48:49** The maintainer reads the one-line change and merges.
+
+The full story, with the four jobs and the caps, is on [the self-fixing loop page](./testing/self-fixing-loop.mdx). The live version is on the [checks page](/checks).
