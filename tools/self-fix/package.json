@@ -1,0 +1,10 @@
+{
+  "name": "penny-self-fix-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The two CLIs the self-fix workflow runs, pinned with a lockfile so CI installs exactly these bytes.",
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.303",
+    "@testsprite/testsprite-cli": "0.15.0"
+  }
+}
