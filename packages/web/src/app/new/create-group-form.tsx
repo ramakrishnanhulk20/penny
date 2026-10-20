@@ -171,7 +171,7 @@ export function CreateGroupForm() {
   }
 
   return (
-    <form onSubmit={submit}>
+    <form onSubmit={submit} className="card form-card">
       <div className="field">
         <label htmlFor={nameId}>Group name</label>
         <input
@@ -223,7 +223,7 @@ export function CreateGroupForm() {
                   aria-describedby={message === undefined ? undefined : `${id}-error`}
                 />
                 {index >= MIN_MEMBERS && (
-                  <button type="button" onClick={() => removeRow(row.key)}>
+                  <button type="button" className="btn-sm" onClick={() => removeRow(row.key)}>
                     Remove
                   </button>
                 )}

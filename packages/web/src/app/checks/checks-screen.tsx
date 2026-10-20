@@ -79,25 +79,27 @@ export function ChecksScreen() {
     return () => controller.abort();
   }, []);
 
-  if (loaded === null) return <p>Reading the latest checks...</p>;
-  if (loaded.status === "failed") return <p>Checks are not available right now.</p>;
+  if (loaded === null) return <p className="status-line">Reading the latest checks...</p>;
+  if (loaded.status === "failed") return <p className="status-line">Checks are not available right now.</p>;
   const { snapshot } = loaded;
 
   return (
     <>
-      <section>
+      <section className="card live-card">
         <h2>Live right now</h2>
-        <p data-testid="checks-live">{liveLine(snapshot.live)}</p>
+        <p data-testid="checks-live" className="live-line">
+          {liveLine(snapshot.live)}
+        </p>
       </section>
 
-      <section>
+      <section className="card">
         <h2>Recent pull requests</h2>
         <ul className="plain">
           {snapshot.prs.map((pr) => (
-            <li key={pr.number} data-testid="checks-pr">
+            <li key={pr.number} data-testid="checks-pr" className="checks-pr">
               <div>{`#${pr.number} ${pr.title}`}</div>
               <div>{pr.state}</div>
-              <div>{verdictLine(pr)}</div>
+              <div data-verdict={pr.verdict}>{verdictLine(pr)}</div>
               <div className="inline">
                 <a href={pr.prUrl} rel="noreferrer">
                   Pull request
@@ -113,7 +115,9 @@ export function ChecksScreen() {
         </ul>
       </section>
 
-      <p data-testid="checks-fetched">{fetchedLine(snapshot)}</p>
+      <p data-testid="checks-fetched" className="fetched">
+        {fetchedLine(snapshot)}
+      </p>
     </>
   );
 }

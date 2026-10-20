@@ -169,7 +169,7 @@ export function SplitEditor({
 
   return (
     <>
-      <fieldset aria-describedby={splitError === undefined ? undefined : splitErrorId}>
+      <fieldset className="f-split" aria-describedby={splitError === undefined ? undefined : splitErrorId}>
         <legend>Split</legend>
         <div className="choices">
           {MODES.map(([mode, label]) => (
@@ -241,12 +241,16 @@ export function SplitEditor({
           })}
         </ul>
 
-        {draft.mode === "exact" && remaining !== null && <p data-testid="split-remaining">{remaining}</p>}
+        {draft.mode === "exact" && remaining !== null && (
+          <p data-testid="split-remaining" className="split-remaining">
+            {remaining}
+          </p>
+        )}
         <FieldError id={splitErrorId} message={splitError} />
       </fieldset>
 
       {parts !== null && (
-        <ul data-testid="split-preview">
+        <ul data-testid="split-preview" className="split-preview">
           {members.flatMap((member) => {
             const part = parts.get(member.id);
             if (part === undefined) return [];

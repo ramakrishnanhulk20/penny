@@ -27,6 +27,7 @@ import {
   messageFor,
   textProblem,
 } from "@/lib/client/messages";
+import { balanceLine, proofLine } from "@/lib/settle-words";
 import { ExpenseForm } from "./expense-form";
 
 // The format lib/group-token.ts checks on the server, repeated here because that module needs node:crypto.
@@ -207,20 +208,6 @@ async function makeNewLink(
   return sent;
 }
 
-// Balances arrive as exact decimal strings such as "-12.00". Reading the sign and the digits as text keeps every
-// amount out of a binary float.
-function balanceLine(name: string, amount: string, base: string): string {
-  if (!/[1-9]/.test(amount)) return `${name} is settled up`;
-  if (amount.startsWith("-")) return `${name} owes ${amount.slice(1)} ${base}`;
-  return `${name} is owed ${amount} ${base}`;
-}
-
-function proofLine(payments: number, expenses: number): string {
-  const paymentWords = payments === 1 ? "1 payment" : `${payments} payments`;
-  const expenseWords = expenses === 1 ? "1 expense" : `${expenses} expenses`;
-  return `${paymentWords} ${payments === 1 ? "settles" : "settle"} ${expenseWords}.`;
-}
-
 function CopyLinkButton({ link, testId }: { readonly link: string; readonly testId?: string }) {
   const [copies, setCopies] = useState(0);
 
@@ -252,7 +239,7 @@ function CopyLinkButton({ link, testId }: { readonly link: string; readonly test
 
 function LinkNotFound() {
   return (
-    <section data-testid="not-found">
+    <section data-testid="not-found" className="card notfound">
       <p>{"This link doesn't open a group. It may have been reset. Ask the group for the current link."}</p>
       <div>
         <Link href="/new" className="button">
@@ -361,9 +348,15 @@ function BaseCurrencyPicker({
     else setError(messageFor(result.error));
   }
 
-  if (group.baseLocked) return <p data-testid="base-locked">Base currency is fixed once money is recorded.</p>;
+  if (group.baseLocked) {
+    return (
+      <p data-testid="base-locked" className="base-locked">
+        Base currency is fixed once money is recorded.
+      </p>
+    );
+  }
   return (
-    <div className="field">
+    <div className="field card">
       <label htmlFor={selectId}>Base currency</label>
       <div className="inline">
         <select
@@ -442,9 +435,9 @@ function MembersSection({
   }
 
   return (
-    <section>
+    <section className="card">
       <h2>Members</h2>
-      <ul>
+      <ul className="chips">
         {group.members.map((member) => (
           <li key={member.id} data-testid="member-row">
             {member.name}
@@ -453,6 +446,7 @@ function MembersSection({
                 {" "}
                 <button
                   type="button"
+                  className="btn-sm"
                   disabled={pending}
                   onClick={() => void remove(member.id)}
                   data-testid="member-remove"
@@ -464,7 +458,7 @@ function MembersSection({
           </li>
         ))}
       </ul>
-      <form onSubmit={add}>
+      <form onSubmit={add} className="member-add">
         <div className="field">
           <label htmlFor={inputId}>New member</label>
           <input
@@ -609,8 +603,8 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
   }
 
   return (
-    <>
-      <header>
+    <div className="board">
+      <header className="board-head">
         <h1 data-testid="group-title">{group.name}</h1>
         <p data-testid="group-base-label">{`Balances in ${base}`}</p>
         <div>
@@ -619,10 +613,8 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
         </div>
       </header>
 
-      <BaseCurrencyPicker token={token} group={group} onSaved={onSaved} />
-
       {created && !linkReset && (
-        <section data-testid="created-banner">
+        <section data-testid="created-banner" className="banner">
           <label htmlFor={linkId}>Group created. Share this link with your group:</label>
           <input id={linkId} className="link" type="text" readOnly value={link} />
           <div>
@@ -632,7 +624,7 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
       )}
 
       {linkReset && (
-        <section data-testid="new-link-banner">
+        <section data-testid="new-link-banner" className="banner">
           <label htmlFor={newLinkId}>New link made. The old link no longer works. Share this one:</label>
           <input id={newLinkId} className="link" type="text" readOnly value={link} />
           <div>
@@ -641,161 +633,186 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
         </section>
       )}
 
-      <div className="field">
-        <label htmlFor={youId}>You are:</label>
-        <select id={youId} value={you} onChange={(event) => onYouChange(event.target.value)} data-testid="you-are">
-          <option value="">Choose your name</option>
-          {group.members.map((member) => (
-            <option key={member.id} value={member.id}>
-              {member.name}
-            </option>
-          ))}
-        </select>
+      <div className="col col-money">
+        <div className="field card you-card">
+          <label htmlFor={youId}>You are:</label>
+          <select id={youId} value={you} onChange={(event) => onYouChange(event.target.value)} data-testid="you-are">
+            <option value="">Choose your name</option>
+            {group.members.map((member) => (
+              <option key={member.id} value={member.id}>
+                {member.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <section className="card">
+          <h2>Balances</h2>
+          <ul>
+            {group.balances.map((balance) => {
+              const name = names.get(balance.memberId);
+              if (name === undefined) return null;
+              const sign = !/[1-9]/.test(balance.amount) ? "settled" : balance.amount.startsWith("-") ? "owes" : "owed";
+              return (
+                <li key={balance.memberId} data-testid="balance-row" data-member={name} data-sign={sign}>
+                  {balanceLine(name, balance.amount, base)}
+                </li>
+              );
+            })}
+          </ul>
+          <p data-testid="balances-total" className="total">{`Total: ${group.total} ${base}`}</p>
+        </section>
+
+        <section className="card settle">
+          <h2>Settle up</h2>
+          {transfers.length === 0 ? (
+            <p data-testid="settled-message" className="settled-message">
+              Everyone is settled up.
+            </p>
+          ) : (
+            <>
+              <ul>
+                {transfers.map((transfer, index) => (
+                  <li key={`${index}:${transfer.from}:${transfer.to}`} data-testid="settle-line">
+                    {`${names.get(transfer.from) ?? ""} pays ${names.get(transfer.to) ?? ""} ${transfer.amount} ${base}`}{" "}
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      disabled={paymentPending}
+                      onClick={() => markPaid(transfer)}
+                      data-testid="settle-mark-paid"
+                    >
+                      Mark as paid
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p data-testid="settle-proof" className="proof">
+                {proofLine(transfers.length, group.settlement.expenseCount)}
+              </p>
+            </>
+          )}
+          <FieldError id={paymentErrorId} message={paymentError} />
+        </section>
+
+        <MembersSection
+          token={token}
+          group={group}
+          onSaved={onSaved}
+          onRemoved={(memberId) => {
+            // The device would otherwise keep pre-selecting someone who is no longer in the group.
+            if (you === memberId) onYouChange("");
+          }}
+        />
+
+        <BaseCurrencyPicker token={token} group={group} onSaved={onSaved} />
       </div>
 
-      <section>
-        <h2>Balances</h2>
-        <ul>
-          {group.balances.map((balance) => {
-            const name = names.get(balance.memberId);
-            if (name === undefined) return null;
-            return (
-              <li key={balance.memberId} data-testid="balance-row" data-member={name}>
-                {balanceLine(name, balance.amount, base)}
-              </li>
-            );
-          })}
-        </ul>
-        <p data-testid="balances-total">{`Total: ${group.total} ${base}`}</p>
-      </section>
+      <div className="col col-ledger">
+        <section className="card expense-card">
+          <h2>{editing === null ? "Add an expense" : "Edit expense"}</h2>
+          <ExpenseForm
+            key={formKey}
+            token={token}
+            group={group}
+            you={you}
+            editing={editing}
+            onSaved={onSaved}
+            onEditDone={leaveEdit}
+          />
+        </section>
 
-      <MembersSection
-        token={token}
-        group={group}
-        onSaved={onSaved}
-        onRemoved={(memberId) => {
-          // The device would otherwise keep pre-selecting someone who is no longer in the group.
-          if (you === memberId) onYouChange("");
-        }}
-      />
-
-      <section>
-        <h2>Settle up</h2>
-        {transfers.length === 0 ? (
-          <p data-testid="settled-message">Everyone is settled up.</p>
-        ) : (
-          <>
+        <section className="card">
+          <h2>Expenses</h2>
+          {group.expenses.length === 0 ? (
+            <p className="empty">No expenses yet.</p>
+          ) : (
             <ul>
-              {transfers.map((transfer, index) => (
-                <li key={`${index}:${transfer.from}:${transfer.to}`} data-testid="settle-line">
-                  {`${names.get(transfer.from) ?? ""} pays ${names.get(transfer.to) ?? ""} ${transfer.amount} ${base}`}{" "}
+              {group.expenses.map((expense) => (
+                <li key={expense.id} data-testid="expense-row">
+                  <div className="exp-details">
+                    <span>{expense.description}</span> <span>{`${expense.amount} ${expense.currency}`}</span>{" "}
+                    <span>{`paid by ${names.get(expense.paidBy) ?? ""}`}</span>
+                  </div>
+                  {expense.currency !== base && expense.rate !== null && (
+                    <div className="exp-base">{`= ${expense.baseAmount} ${base} at ${expense.rate}`}</div>
+                  )}
+                  <div className="inline exp-actions">
+                    {confirmingDelete === expense.id ? (
+                      <>
+                        <span>Delete this expense?</span>
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          disabled={deletePending}
+                          onClick={() => void confirmDelete(expense)}
+                          data-testid="expense-delete-confirm"
+                        >
+                          Delete
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          disabled={deletePending}
+                          onClick={() => setConfirmingDelete(null)}
+                          data-testid="expense-delete-cancel"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          onClick={() => startEdit(expense)}
+                          data-testid="expense-edit"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          onClick={() => askDelete(expense.id)}
+                          data-testid="expense-delete"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  {rowError?.expenseId === expense.id && <FieldError id={rowErrorId} message={rowError.message} />}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="card">
+          <h2>Payments</h2>
+          {group.payments.length === 0 ? (
+            <p className="empty">No payments yet.</p>
+          ) : (
+            <ul>
+              {group.payments.map((payment) => (
+                <li key={payment.id} data-testid="payment-row">
+                  {`${names.get(payment.from) ?? ""} paid ${names.get(payment.to) ?? ""} ${payment.baseAmount} ${base}`}{" "}
                   <button
                     type="button"
+                    className="btn-sm"
                     disabled={paymentPending}
-                    onClick={() => markPaid(transfer)}
-                    data-testid="settle-mark-paid"
+                    onClick={() => undo(payment.id)}
+                    data-testid="payment-undo"
                   >
-                    Mark as paid
+                    Undo
                   </button>
                 </li>
               ))}
             </ul>
-            <p data-testid="settle-proof">{proofLine(transfers.length, group.settlement.expenseCount)}</p>
-          </>
-        )}
-        <FieldError id={paymentErrorId} message={paymentError} />
-      </section>
-
-      <section>
-        <h2>{editing === null ? "Add an expense" : "Edit expense"}</h2>
-        <ExpenseForm
-          key={formKey}
-          token={token}
-          group={group}
-          you={you}
-          editing={editing}
-          onSaved={onSaved}
-          onEditDone={leaveEdit}
-        />
-      </section>
-
-      <section>
-        <h2>Expenses</h2>
-        {group.expenses.length === 0 ? (
-          <p>No expenses yet.</p>
-        ) : (
-          <ul>
-            {group.expenses.map((expense) => (
-              <li key={expense.id} data-testid="expense-row">
-                <div>
-                  <span>{expense.description}</span> <span>{`${expense.amount} ${expense.currency}`}</span>{" "}
-                  <span>{`paid by ${names.get(expense.paidBy) ?? ""}`}</span>
-                </div>
-                {expense.currency !== base && expense.rate !== null && (
-                  <div>{`= ${expense.baseAmount} ${base} at ${expense.rate}`}</div>
-                )}
-                <div className="inline">
-                  {confirmingDelete === expense.id ? (
-                    <>
-                      <span>Delete this expense?</span>
-                      <button
-                        type="button"
-                        disabled={deletePending}
-                        onClick={() => void confirmDelete(expense)}
-                        data-testid="expense-delete-confirm"
-                      >
-                        Delete
-                      </button>
-                      <button
-                        type="button"
-                        disabled={deletePending}
-                        onClick={() => setConfirmingDelete(null)}
-                        data-testid="expense-delete-cancel"
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" onClick={() => startEdit(expense)} data-testid="expense-edit">
-                        Edit
-                      </button>
-                      <button type="button" onClick={() => askDelete(expense.id)} data-testid="expense-delete">
-                        Delete
-                      </button>
-                    </>
-                  )}
-                </div>
-                {rowError?.expenseId === expense.id && <FieldError id={rowErrorId} message={rowError.message} />}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section>
-        <h2>Payments</h2>
-        {group.payments.length === 0 ? (
-          <p>No payments yet.</p>
-        ) : (
-          <ul>
-            {group.payments.map((payment) => (
-              <li key={payment.id} data-testid="payment-row">
-                {`${names.get(payment.from) ?? ""} paid ${names.get(payment.to) ?? ""} ${payment.baseAmount} ${base}`}{" "}
-                <button
-                  type="button"
-                  disabled={paymentPending}
-                  onClick={() => undo(payment.id)}
-                  data-testid="payment-undo"
-                >
-                  Undo
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </>
+          )}
+        </section>
+      </div>
+    </div>
   );
 }
 
@@ -888,10 +905,10 @@ export function GroupScreen() {
     );
   }
 
-  if (token === undefined) return <p>Loading the group...</p>;
+  if (token === undefined) return <p className="status-line">Loading the group...</p>;
   if (token === null) return <LinkNotFound />;
-  if (loaded === null || loaded.token !== token) return <p>Loading the group...</p>;
+  if (loaded === null || loaded.token !== token) return <p className="status-line">Loading the group...</p>;
   if (loaded.status === "not_found") return <LinkNotFound />;
-  if (loaded.status === "failed") return <p className="error">{FALLBACK_MESSAGE}</p>;
+  if (loaded.status === "failed") return <p className="error status-line">{FALLBACK_MESSAGE}</p>;
   return <GroupBoard ready={loaded} onYouChange={changeYou} onSaved={saved} onLinkReset={linkWasReset} />;
 }

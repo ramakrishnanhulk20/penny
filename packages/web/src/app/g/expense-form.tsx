@@ -322,7 +322,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
 
   return (
     <form onSubmit={submit} data-testid="expense-form">
-      <div className="field">
+      <div className="field f-desc">
         <label htmlFor={descriptionId}>What was it for?</label>
         <input
           id={descriptionId}
@@ -337,7 +337,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
         <FieldError id={`${descriptionId}-error`} message={errors.description} />
       </div>
 
-      <div className="field">
+      <div className="field f-amount">
         <label htmlFor={amountId}>Amount</label>
         <input
           id={amountId}
@@ -353,7 +353,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
         <FieldError id={`${amountId}-error`} message={errors.amount} />
       </div>
 
-      <div className="field">
+      <div className="field f-currency">
         <label htmlFor={currencyId}>Currency</label>
         <select
           id={currencyId}
@@ -378,7 +378,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
       </div>
 
       {foreign && (
-        <div className="field">
+        <div className="field f-rate">
           <label htmlFor={rateId}>{`Rate to ${base.code}`}</label>
           <input
             id={rateId}
@@ -396,10 +396,12 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
             data-testid="expense-rate"
           />
           {rateSource.state === "found" && (
-            <p id={rateHelpId} data-testid="rate-source">{`ECB reference rate, ${rateSource.date}`}</p>
+            <p id={rateHelpId} data-testid="rate-source" className="rate-source">
+              {`ECB reference rate, ${rateSource.date}`}
+            </p>
           )}
           {rateSource.state === "none" && (
-            <p id={rateHelpId} data-testid="rate-source">
+            <p id={rateHelpId} data-testid="rate-source" className="rate-source">
               No reference rate available. Enter the rate you used.
             </p>
           )}
@@ -410,7 +412,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
         </div>
       )}
 
-      <div className="field">
+      <div className="field f-paid">
         <label htmlFor={paidById}>Paid by</label>
         <select
           id={paidById}
@@ -437,7 +439,7 @@ export function ExpenseForm({ token, group, you, editing, onSaved, onEditDone }:
         memberErrors={errors.members ?? NO_MEMBER_ERRORS}
       />
 
-      <div>
+      <div className="f-actions">
         <button
           id={submitId}
           type="submit"
