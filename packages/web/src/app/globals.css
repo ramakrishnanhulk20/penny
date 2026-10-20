@@ -154,3 +154,974 @@ button,
     align-items: stretch;
   }
 }
+
+/* Themes the app pages (/new, /g, /checks) to match the poster home page. */
+:root {
+  --ok: #7fb8a4;
+}
+
+main.cinema {
+  color-scheme: dark;
+}
+
+html:has(main.cinema) {
+  background: var(--ink);
+  scroll-padding-top: 80px;
+}
+
+main.app {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 104px 32px 96px;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--paper);
+}
+
+main.app li,
+main.app .mono {
+  font-variant-numeric: tabular-nums;
+}
+
+main.app h2 {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 16px;
+}
+
+main.app label,
+main.app legend {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+main.app label {
+  margin-bottom: 6px;
+}
+
+main.app legend {
+  padding: 0;
+  margin-bottom: 12px;
+}
+
+main.app fieldset {
+  border: 0;
+  padding: 0;
+  gap: 14px;
+}
+
+main.app .field {
+  align-items: stretch;
+  gap: 0;
+}
+
+main.app input[type="text"],
+main.app select {
+  width: 100%;
+  height: 46px;
+  padding: 0 14px;
+  background-color: var(--ink-2);
+  color: var(--paper);
+  border: 1px solid rgba(242, 238, 232, 0.18);
+  border-radius: 8px;
+  font: 16px var(--font-sans), system-ui, sans-serif;
+  transition:
+    border-color 160ms var(--ease-out),
+    box-shadow 160ms var(--ease-out);
+}
+
+main.app input[type="text"]:hover,
+main.app select:hover {
+  border-color: rgba(242, 238, 232, 0.32);
+}
+
+main.app input[type="text"]:focus-visible,
+main.app select:focus-visible {
+  outline: none;
+  border-color: var(--copper);
+  box-shadow: 0 0 0 3px rgba(200, 118, 62, 0.25);
+}
+
+main.app input[type="text"][aria-invalid="true"],
+main.app select[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
+main.app input[type="text"][aria-invalid="true"]:focus-visible,
+main.app select[aria-invalid="true"]:focus-visible {
+  box-shadow: 0 0 0 3px rgba(226, 96, 107, 0.25);
+}
+
+main.app select {
+  appearance: none;
+  padding-right: 40px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%238A847C' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2 4.5l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 12px;
+}
+
+main.app input.link[type="text"] {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--copper-hi);
+}
+
+main.app input[type="checkbox"],
+main.app input[type="radio"] {
+  accent-color: var(--copper);
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+}
+
+main.app .inline > input[type="text"],
+main.app .inline > select {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+
+main.app .choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+main.app .choices label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  margin-bottom: 0;
+  padding: 0 14px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--paper-dim);
+  cursor: pointer;
+}
+
+main.app .choices label:hover {
+  border-color: rgba(242, 238, 232, 0.32);
+  color: var(--paper);
+}
+
+main.app .choices label:has(input:checked),
+main.app .choices label:has(input:checked):hover {
+  border-color: var(--copper);
+  color: var(--paper);
+  background: rgba(200, 118, 62, 0.08);
+}
+
+main.app input[type="radio"]:focus-visible,
+main.app input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 2px;
+}
+
+main.app button,
+main.app a.button {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid rgba(242, 238, 232, 0.32);
+  color: var(--paper);
+  font: 600 14px/1 var(--font-sans), system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  width: auto;
+  cursor: pointer;
+  transition:
+    background-color 160ms var(--ease-out),
+    border-color 160ms var(--ease-out),
+    color 160ms var(--ease-out);
+}
+
+main.app button:hover:not(:disabled) {
+  border-color: var(--copper);
+  color: var(--copper-hi);
+}
+
+main.app button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+main.app button:focus-visible,
+main.app a.button:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 3px;
+}
+
+main.app button[type="submit"],
+main.app a.button {
+  height: 46px;
+  padding: 0 20px;
+  background: var(--copper);
+  color: var(--ink);
+  border: 0;
+}
+
+main.app button[type="submit"]:hover:not(:disabled),
+main.app a.button:hover {
+  background: var(--copper-hi);
+  color: var(--ink);
+}
+
+main.app a.button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+main.app .btn-sm {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+main.app .error {
+  color: var(--error);
+  font-size: 14px;
+  margin-top: 6px;
+}
+
+main.app .card {
+  gap: 0;
+  background: var(--ink-2);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 24px;
+}
+
+main.app .card ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+main.app :where(.card ul) > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--rule);
+}
+
+main.app :where(.card ul) > li:first-child {
+  border-top: 0;
+}
+
+main.app .card a:not(.button),
+main.app .lede a {
+  color: var(--copper-hi);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+main.app .poster-title {
+  font-size: clamp(3rem, 8vw, 7.5rem);
+  font-weight: 520;
+  letter-spacing: -0.045em;
+  line-height: 0.92;
+  color: var(--paper);
+}
+
+main.app .lede {
+  font-size: 18px;
+  line-height: 1.5;
+  color: var(--paper-dim);
+  max-width: 26rem;
+  /* The poster title's 0.92 leading lets descenders hang into the next line, so the lede keeps its distance. */
+  margin-top: 32px;
+}
+
+main.app .new-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+main.app .new-layout > form {
+  margin-top: 32px;
+}
+
+main.app .form-card {
+  padding: 32px;
+  gap: 22px;
+}
+
+main.app .form-card .inline > button {
+  flex: none;
+}
+
+main.app .status-line {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+main.app .status-line.error {
+  color: var(--error);
+  margin-top: 0;
+}
+
+main.app .status-line::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 10px;
+  border-radius: 50%;
+  background: var(--copper);
+  vertical-align: middle;
+  animation: status-pulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes status-pulse {
+  from {
+    opacity: 0.3;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+main.app .notfound {
+  max-width: 36rem;
+  margin: 40px 0;
+}
+
+main.app .notfound p {
+  font-size: 18px;
+}
+
+main.app .notfound > div {
+  margin-top: 24px;
+}
+
+main.app .board {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 24px;
+}
+
+main.app .board > * {
+  min-width: 0;
+}
+
+main.app .col {
+  display: contents;
+}
+
+main.app .board-head {
+  gap: 0;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 28px;
+  margin-bottom: 8px;
+}
+
+main.app .board-head h1 {
+  font-size: clamp(2.75rem, 7vw, 6.5rem);
+  font-weight: 520;
+  letter-spacing: -0.045em;
+  line-height: 0.92;
+  color: var(--paper);
+  max-width: 18ch;
+}
+
+main.app .board-head > p {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--copper-hi);
+  margin-top: 14px;
+}
+
+main.app .board-head > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+main.app .board-head > div > span:not([role="status"]) {
+  font-size: 14px;
+  color: var(--paper-dim);
+}
+
+main.app .board-head > div > .error {
+  flex-basis: 100%;
+  margin-top: 0;
+}
+
+main.app [role="status"] {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--ok);
+}
+
+/* An empty status span still takes a gap in its row, so the gap is taken back until it has words. */
+main.app [role="status"]:empty {
+  margin-left: -10px;
+}
+
+main.app .banner {
+  gap: 8px;
+  border: 1px solid var(--copper);
+  background: rgba(200, 118, 62, 0.08);
+  border-radius: 10px;
+  padding: 20px 24px;
+}
+
+main.app .banner label {
+  margin-bottom: 0;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--paper);
+}
+
+main.app .banner > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+main.app .you-card {
+  gap: 0;
+}
+
+main.app li[data-sign] {
+  font-size: 17px;
+  padding: 12px 0 12px 14px;
+  border-left: 3px solid transparent;
+}
+
+main.app li[data-sign="owed"] {
+  border-left-color: var(--copper);
+}
+
+main.app li[data-sign="owes"] {
+  border-left-color: rgba(242, 238, 232, 0.28);
+}
+
+main.app .total {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 12px;
+}
+
+main.app .settle li {
+  font-size: 17px;
+  justify-content: flex-start;
+}
+
+main.app .settle li::before {
+  content: "";
+  display: inline-block;
+  width: 18px;
+  height: 2px;
+  background: var(--copper);
+  vertical-align: middle;
+}
+
+main.app .settle li > button {
+  margin-left: auto;
+}
+
+main.app .settle .proof {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--copper-hi);
+  margin-top: 14px;
+}
+
+main.app .settle .settled-message {
+  font-size: 18px;
+  color: var(--paper);
+}
+
+main.app .settle .settled-message::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 10px;
+  border-radius: 50%;
+  background: var(--ok);
+  vertical-align: middle;
+}
+
+main.app ul.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+main.app ul.chips > li {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+main.app ul.chips > li:not(:has(button)) {
+  padding: 6px 12px;
+}
+
+main.app .base-locked {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+main.app .expense-card > form {
+  gap: 18px;
+}
+
+main.app .f-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+main.app .f-rate p:not(.error) {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+main.app .f-rate .rate-source {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--copper-hi);
+}
+
+main.app ul.plain {
+  gap: 0;
+}
+
+main.app .f-split .plain {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+main.app .f-split .plain > li {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  border: 0;
+}
+
+main.app .f-split .plain > li:not(.field) > label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  margin-bottom: 0;
+  padding: 0 12px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--paper);
+  cursor: pointer;
+}
+
+main.app .f-split .plain > li:not(.field) > label:hover {
+  border-color: rgba(242, 238, 232, 0.32);
+}
+
+main.app .split-remaining {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--copper-hi);
+}
+
+main.app ul.split-preview {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--paper-dim);
+}
+
+main.app ul.split-preview > li {
+  display: block;
+  padding: 6px 0;
+  border-top: 1px dashed var(--rule);
+}
+
+main.app .exp-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+main.app .exp-details > span:nth-child(1) {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+main.app .exp-details > span:nth-child(2) {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 15px;
+  color: var(--paper);
+}
+
+main.app .exp-details > span:nth-child(3) {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+main.app .exp-base {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  flex-basis: 100%;
+  order: 1;
+}
+
+main.app .exp-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+main.app .exp-actions > span {
+  font-size: 14px;
+  color: var(--paper-dim);
+}
+
+main.app li:has(> .exp-details) > .error {
+  flex-basis: 100%;
+  order: 2;
+  margin-top: 0;
+}
+
+main.app .empty {
+  font-size: 15px;
+  color: var(--muted);
+}
+
+main.app:has(.checks-intro) {
+  max-width: 960px;
+}
+
+main.app:has(.checks-intro) > section {
+  margin-top: 24px;
+}
+
+main.app .checks-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 28px;
+}
+
+main.app .checks-intro .lede {
+  margin-top: 0;
+}
+
+main.app .live-card {
+  border-color: var(--copper);
+}
+
+main.app .live-line {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 14px;
+  color: var(--paper);
+}
+
+main.app .checks-pr {
+  flex-direction: column;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+main.app .checks-pr > div:nth-child(1) {
+  font-size: 16px;
+  font-weight: 500;
+}
+
+main.app .checks-pr > div:nth-child(2) {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+main.app .checks-pr > [data-verdict] {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+main.app .checks-pr > [data-verdict="passed"] {
+  color: var(--ok);
+}
+
+main.app .checks-pr > [data-verdict="failed"] {
+  color: var(--error);
+}
+
+main.app .checks-pr > .inline {
+  gap: 16px;
+}
+
+main.app .checks-pr > .inline a {
+  font-size: 13px;
+  color: var(--copper-hi);
+  transition: color 160ms var(--ease-out);
+}
+
+main.app .checks-pr > .inline a:hover,
+main.app .checks-pr > .inline a:focus-visible {
+  color: var(--paper);
+  text-decoration-color: var(--copper);
+}
+
+main.app .checks-pr > .inline a:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 3px;
+}
+
+main.app .fetched {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 16px;
+}
+
+@media (max-width: 1099.98px) {
+  main.app .col-money > :nth-child(1) {
+    order: 1;
+  }
+
+  main.app .col-money > :nth-child(2) {
+    order: 2;
+  }
+
+  main.app .col-money > :nth-child(3) {
+    order: 3;
+  }
+
+  main.app .col-money > :nth-child(4) {
+    order: 7;
+  }
+
+  main.app .col-money > :nth-child(5) {
+    order: 8;
+  }
+
+  main.app .col-ledger > :nth-child(1) {
+    order: 4;
+  }
+
+  main.app .col-ledger > :nth-child(2) {
+    order: 5;
+  }
+
+  main.app .col-ledger > :nth-child(3) {
+    order: 6;
+  }
+}
+
+@media (min-width: 640px) {
+  main.app .you-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+  }
+
+  main.app .you-card label {
+    margin-bottom: 0;
+  }
+
+  main.app .you-card select {
+    max-width: 18rem;
+  }
+
+  main.app .member-add {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  main.app .member-add .field {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  main.app .member-add > div:last-child {
+    margin-top: 22px;
+  }
+
+  main.app .expense-card > form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 16px;
+  }
+
+  main.app .f-desc,
+  main.app .f-rate,
+  main.app .f-paid,
+  main.app .f-split,
+  main.app .f-actions,
+  main.app .expense-card > form > ul.split-preview,
+  main.app .expense-card > form > .error {
+    grid-column: span 2;
+  }
+
+  main.app .f-split .plain {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  main.app .exp-details > span:nth-child(2) {
+    margin-left: auto;
+  }
+}
+
+@media (min-width: 760px) {
+  main.app .checks-pr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px 24px;
+    align-items: center;
+  }
+
+  main.app .checks-pr > .inline {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 960px) {
+  main.app .new-layout {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+    grid-template-rows: auto 1fr;
+    column-gap: 64px;
+    align-items: start;
+  }
+
+  main.app .new-layout > h1 {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  main.app .new-layout > .lede {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  main.app .new-layout > form {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    margin-top: 0;
+  }
+
+  main.app .checks-intro {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 40px;
+  }
+}
+
+@media (min-width: 1100px) {
+  main.app .board {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    column-gap: 40px;
+    align-items: start;
+  }
+
+  main.app .board > .board-head,
+  main.app .board > .banner {
+    grid-column: 1 / -1;
+  }
+
+  main.app .col {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 639.98px) {
+  main.app {
+    padding: 88px 16px 72px;
+  }
+
+  main.app .card {
+    padding: 18px;
+  }
+
+  main.app .form-card {
+    padding: 20px;
+  }
+
+  main.app .form-card button[type="submit"] {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main.app .status-line::before {
+    animation: none;
+  }
+
+  main.app button,
+  main.app a.button,
+  main.app input[type="text"],
+  main.app select,
+  main.app .checks-pr > .inline a {
+    transition: none;
+  }
+}
