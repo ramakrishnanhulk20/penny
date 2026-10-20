@@ -4,6 +4,9 @@ import { fetchSnapshot, readSnapshot } from "@/lib/checks";
 import { json } from "@/lib/http";
 import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
 
+// Vercel stops this function after 10 s, so a stuck database or upstream call cannot hold it open (threat model C26).
+export const maxDuration = 10;
+
 /**
  * How Penny is tested, read from GitHub: the running commit and the TestSprite verdict on each recent pull request.
  * Takes no input that changes what is fetched: no query, body or header does (threat model C21). The client address

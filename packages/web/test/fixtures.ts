@@ -112,10 +112,11 @@ export function deleteExpense(token: string | null, expenseId: string, version: 
   return deleteExpenseRoute(request, { params: Promise.resolve({ expenseId }) });
 }
 
-/** A payment of 10 in the base currency from the second member to the first. */
+/** A payment of 10 in the base currency from the second member to the first, pressed on `group`'s version. */
 export function paymentBody(group: GroupView, overrides: Partial<AddPaymentRequest> = {}): AddPaymentRequest {
   return {
     clientId: `test-${crypto.randomUUID()}`,
+    planVersion: group.version,
     from: group.members[1].id,
     to: group.members[0].id,
     amount: group.baseDigits === 0 ? "10" : `10.${"0".repeat(group.baseDigits)}`,

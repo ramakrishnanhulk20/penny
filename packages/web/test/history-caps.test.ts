@@ -102,7 +102,7 @@ describe("the event cap", () => {
     token = started.token;
     earlierAdd = expenseBody(started.group);
     expense = ((await (await postExpense(token, earlierAdd)).json()) as AddExpenseResponse).expense;
-    paymentId = ((await (await postPayment(token, paymentBody(started.group))).json()) as AddPaymentResponse).payment.id;
+    paymentId = ((await (await postPayment(token, paymentBody(await readGroup(token)))).json()) as AddPaymentResponse).payment.id;
     removable = (await (await postMember(token, { name: "Dev" })).json()).member.id;
     group = await readGroup(token);
     await fillLog(group.id, MAX_EVENTS - 1);
@@ -120,7 +120,7 @@ describe("the event cap", () => {
     ["adding an expense", () => postExpense(token, expenseBody(group))],
     ["editing an expense", () => patchExpense(token, expense.id, editBody(group, expense.version, { amount: "7.00" }))],
     ["deleting an expense", () => deleteExpense(token, expense.id, expense.version)],
-    ["adding a payment", () => postPayment(token, paymentBody(group))],
+    ["adding a payment", async () => postPayment(token, paymentBody(await readGroup(token)))],
     ["undoing a payment", () => deletePayment(token, paymentId)],
     ["adding a member", () => postMember(token, { name: "Gus" })],
     ["removing a member", () => deleteMember(token, removable)],
@@ -215,12 +215,12 @@ describe("the payment row cap", () => {
     const { payment } = (await last.json()) as AddPaymentResponse;
     expect(await rowCount(payments, group.id)).toBe(MAX_PAYMENT_ROWS);
 
-    const over = await postPayment(token, paymentBody(group));
+    const over = await postPayment(token, paymentBody(await readGroup(token)));
     expect(over.status).toBe(409);
     expect(await errorCode(over)).toBe("limit_reached");
 
     expect((await deletePayment(token, payment.id)).status).toBe(200);
-    const afterUndo = await postPayment(token, paymentBody(group));
+    const afterUndo = await postPayment(token, paymentBody(await readGroup(token)));
     expect(afterUndo.status).toBe(409);
     expect(await errorCode(afterUndo)).toBe("limit_reached");
     expect(await rowCount(payments, group.id)).toBe(MAX_PAYMENT_ROWS);

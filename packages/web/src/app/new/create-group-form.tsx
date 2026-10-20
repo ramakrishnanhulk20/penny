@@ -4,7 +4,8 @@ import { listCurrencies } from "@penny/core";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { FieldError } from "@/components/field-error";
 import { createGroup } from "@/lib/client/api";
-import { GROUP_NAME_MAX, MEMBER_NAME_MAX, cleanText, isTooLong, messageFor } from "@/lib/client/messages";
+import { GROUP_NAME_MAX, MEMBER_NAME_MAX, cleanText, messageFor, textProblem } from "@/lib/client/messages";
+import { nameKey } from "@/lib/text";
 
 const MIN_MEMBERS = 2;
 const MAX_MEMBERS = 20;
@@ -24,10 +25,10 @@ type FormErrors = {
 
 type Field = "name" | "currency" | "members" | "form";
 
-// The browser's own checks, as error codes, run before any request. A blank member field is skipped rather than
-// refused, because the rule counts named members.
+// The browser's own checks, as error codes, run before any request, with the server's own name rule. A blank member
+// field is skipped rather than refused, because the rule counts named members.
 function checkForm(name: string, rows: readonly MemberRow[]) {
-  const nameCode = cleanText(name) === "" || isTooLong(name, GROUP_NAME_MAX) ? "bad_name" : undefined;
+  const nameCode = textProblem(name, GROUP_NAME_MAX) === null ? undefined : "bad_name";
   const rowCodes = new Map<number, string>();
   const seen = new Set<string>();
   const names: string[] = [];
@@ -35,12 +36,12 @@ function checkForm(name: string, rows: readonly MemberRow[]) {
     const value = cleanText(row.value);
     if (value === "") continue;
     names.push(value);
-    if (isTooLong(value, MEMBER_NAME_MAX)) {
+    if (textProblem(value, MEMBER_NAME_MAX) !== null) {
       rowCodes.set(row.key, "bad_member_name");
       continue;
     }
-    // The server compares names the same way: NFC first, then lower case, so "Ana" and "ana" are one name.
-    const key = value.toLowerCase();
+    // The server's own key: NFC first, then lower case, so "Ana" and "ana" are one name.
+    const key = nameKey(value);
     if (seen.has(key)) rowCodes.set(row.key, "duplicate_member_name");
     else seen.add(key);
   }
@@ -129,7 +130,10 @@ export function CreateGroupForm() {
     const checked = checkForm(name, rows);
     if (checked.nameCode !== undefined || checked.membersCode !== undefined || checked.rowCodes.size > 0) {
       const rowMessages = new Map<number, string>();
-      for (const [key, code] of checked.rowCodes) rowMessages.set(key, messageFor(code, context));
+      for (const [key, code] of checked.rowCodes) {
+        const memberName = rows.find((row) => row.key === key)?.value;
+        rowMessages.set(key, messageFor(code, { ...context, memberName }));
+      }
       setErrors({
         name: checked.nameCode === undefined ? undefined : messageFor(checked.nameCode, context),
         members: checked.membersCode === undefined ? undefined : messageFor(checked.membersCode, context),

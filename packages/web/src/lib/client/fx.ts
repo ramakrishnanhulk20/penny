@@ -17,6 +17,7 @@ export async function lookUpRate(from: string, to: string, signal?: AbortSignal)
   try {
     response = await fetch(`/api/fx?${query}`, {
       method: "GET",
+      headers: { "Content-Type": "application/json" },
       cache: "no-store",
       credentials: "same-origin",
       referrerPolicy: "no-referrer",

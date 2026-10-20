@@ -25,4 +25,4 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      - run: node --test "scripts/self-fix/*.test.mjs"
+      - run: node --test "scripts/self-fix/*.test.mjs" "scripts/review-gate/*.test.mjs"

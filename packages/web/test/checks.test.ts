@@ -1,9 +1,10 @@
 // Not covered: the real GitHub API (every call here goes to a fake fetch); a 5 s timeout actually firing (only that
 // every call carries a timeout signal); two real Postgres sessions racing for the advisory lock, because PGlite runs a
 // single session where an advisory lock is always granted again, so another instance holding it is played by a
-// stand-in lock answer; Neon itself; and the /checks page in a browser.
+// stand-in lock answer; Neon itself; and the /checks page in a browser (only its verdict line, as text).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/checks/route";
+import { verdictLine } from "@/app/checks/checks-screen";
 import { type Db, setDbForTests } from "@/db/client";
 import { checksSnapshot } from "@/db/schema";
 import { createTestDb } from "@/db/testing";
@@ -13,9 +14,10 @@ import { type ChecksSnapshot, fetchSnapshot, parseVerdict, readSnapshot, safeRep
 vi.mock("next/server", () => ({ connection: async () => undefined }));
 
 const BOT_ID = 258111874;
+const OWNER_ID = 140826327;
 const REPORT = "https://www.testsprite.com/dashboard-v3/o/org-1/projects/project-1/execution/run-1";
 const LIST_URL =
-  "https://api.github.com/repos/ramakrishnanhulk20/penny/pulls?state=all&sort=created&direction=desc&per_page=12";
+  "https://api.github.com/repos/ramakrishnanhulk20/penny/pulls?state=all&sort=created&direction=desc&per_page=50";
 const NO_COUNTS = { passed: null, failed: null, blocked: null, total: null };
 
 function sha(digit: string): string {
@@ -26,7 +28,13 @@ function statusesUrl(head: string): string {
   return `https://api.github.com/repos/ramakrishnanhulk20/penny/commits/${head}/statuses?per_page=100`;
 }
 
-function pull(number: number, state: "open" | "closed", mergedInto: string | null, head: string) {
+function pull(
+  number: number,
+  state: "open" | "closed",
+  mergedInto: string | null,
+  head: string,
+  user: { login: string; id: number } | null = { login: "ramakrishnanhulk20", id: OWNER_ID },
+) {
   return {
     number,
     title: `Change ${number}`,
@@ -35,6 +43,7 @@ function pull(number: number, state: "open" | "closed", mergedInto: string | nul
     merge_commit_sha: mergedInto,
     head: { sha: head },
     html_url: "https://evil.example/not-github",
+    user,
   };
 }
 
@@ -102,6 +111,8 @@ describe("parseVerdict", () => {
     ["failure", "23/28 passed · 5 failed", { verdict: "failed", passed: 23, failed: 5, blocked: 0, total: 28 }],
     ["error", "23/28 passed · 5 failed", { verdict: "failed", passed: 23, failed: 5, blocked: 0, total: 28 }],
     ["success", "40/41 passed · 1 blocked", { verdict: "passed", passed: 40, failed: 0, blocked: 1, total: 41 }],
+    ["success", "0/21 passed · 21 blocked", { verdict: "blocked", passed: 0, failed: 0, blocked: 21, total: 21 }],
+    ["success", "0/21 passed · 1 failed · 20 blocked", { verdict: "unknown", ...NO_COUNTS }],
     ["failure", "40/41 passed · 1 blocked", { verdict: "failed", passed: 40, failed: 0, blocked: 1, total: 41 }],
   ])("reads state %s with %j", (state, description, expected) => {
     expect(parseVerdict(state, description)).toEqual(expected);
@@ -226,6 +237,39 @@ describe("fetchSnapshot", () => {
 
     expect(snapshot.prs[1]).toMatchObject({ verdict: "unknown", ...NO_COUNTS, reportUrl: null });
     expect(snapshot.prs[2]).toMatchObject({ verdict: "failed", passed: 23, failed: 5, total: 28 });
+  });
+
+  it("lists only the owner's pull requests, so twelve newer ones from strangers neither show nor push them out", async () => {
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha("d"));
+    const stranger = { login: "someone", id: 1 };
+    const spam = Array.from({ length: 12 }, (_, index) =>
+      pull(100 + index, "open", null, (0xe00 + index).toString(16).padStart(40, "0"), stranger),
+    );
+    const bodies = new Map<string, unknown>([
+      [LIST_URL, [...spam.reverse(), pull(10, "closed", sha("d"), sha("b")), pull(9, "open", null, sha("a"))]],
+      [statusesUrl(sha("b")), [status()]],
+      [statusesUrl(sha("a")), []],
+    ]);
+    const github = fakeGitHub(bodies);
+
+    const snapshot = await fetchSnapshot(github.fetchImpl, null);
+
+    expect(snapshot.prs.map((pr) => [pr.number, pr.title, pr.verdict])).toEqual([
+      [10, "Change 10", "passed"],
+      [9, "Change 9", "not run"],
+    ]);
+    expect(snapshot.live).toEqual({ sha: sha("d"), pr: 10 });
+    expect(github.calls.map((call) => call.url)).toEqual([LIST_URL, statusesUrl(sha("b")), statusesUrl(sha("a"))]);
+  });
+
+  it("drops a pull request from a deleted account or another account with the owner's login", async () => {
+    const bodies = threePulls();
+    const [newest, middle, oldest] = bodies.get(LIST_URL) as ReturnType<typeof pull>[];
+    bodies.set(LIST_URL, [{ ...newest, user: null }, { ...middle, user: { login: "ramakrishnanhulk20", id: 7 } }, oldest]);
+
+    const snapshot = await fetchSnapshot(fakeGitHub(bodies).fetchImpl, null);
+
+    expect(snapshot.prs.map((pr) => pr.number)).toEqual([1]);
   });
 
   it("fails the whole read on an answer other than 200 or a body over 1 MB", async () => {
@@ -431,5 +475,25 @@ describe("GET /api/checks", () => {
       [1, "closed", "not run"],
     ]);
     expect(body.stale).toBe(false);
+  });
+});
+
+describe("a run where nothing could run", () => {
+  it("stores and serves blocked, and prints how many of how many could not run", async () => {
+    const db = await createTestDb();
+    const bodies = threePulls();
+    bodies.set(statusesUrl(sha("b")), [status({ description: "0/21 passed · 21 blocked" })]);
+    const now = new Date("2026-10-20T09:00:00.000Z");
+
+    const served = await readSnapshot(db, now, () => fetchSnapshot(fakeGitHub(bodies).fetchImpl, null));
+    const again = await readSnapshot(db, new Date(now.getTime() + 60_000), async () => {
+      throw new Error("not asked again within the window");
+    });
+
+    for (const snapshot of [served, again]) {
+      expect(snapshot.prs[1]).toMatchObject({ verdict: "blocked", passed: 0, failed: 0, blocked: 21, total: 21 });
+      expect(verdictLine(snapshot.prs[1])).toBe("TestSprite: blocked, 21 of 21 could not run");
+    }
+    expect(verdictLine(served.prs[0])).toBe("TestSprite: running");
   });
 });

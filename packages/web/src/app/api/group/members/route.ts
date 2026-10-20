@@ -5,9 +5,12 @@ import type { AddMemberResponse } from "@/lib/api-types";
 import { buildGroupView } from "@/lib/group-view";
 import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 import { resolveGroup } from "@/lib/groups";
-import { badRequest, json, notFound, serverError } from "@/lib/http";
+import { badRequest, json, notFound, sendsNonJsonBody, serverError, unsupportedMediaType } from "@/lib/http";
 import { addMember } from "@/lib/ledger-store";
 import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
+
+// Vercel stops this function after 10 s, so a stuck database or upstream call cannot hold it open (threat model C26).
+export const maxDuration = 10;
 
 /**
  * Adds a member to the group named by the x-penny-group header. Body: { name }, nothing else.
@@ -18,11 +21,13 @@ import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib
  * holds MAX_EVENTS events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
+ * 415 unsupported_media_type when the request carries a body that is not declared application/json.
  * Any other failure is a bare 500.
  */
 export async function POST(request: Request): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
   await connection();
+  if (sendsNonJsonBody(request)) return unsupportedMediaType();
   try {
     // Counted on a short connection of its own, so the body below is still read with no connection held.
     const allowed = await withDb(async (db) =>

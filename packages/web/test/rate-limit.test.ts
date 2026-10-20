@@ -12,7 +12,7 @@ import { createTestDb } from "@/db/testing";
 import { LIMITS, type Limit, clientNetwork, takeRateLimit, tooMany } from "@/lib/rate-limit";
 
 const T0 = new Date("2026-10-19T12:00:05.000Z");
-const DAY_MS = 24 * 60 * 60 * 1000;
+const TEN_MINUTES_MS = 10 * 60 * 1000;
 
 // A copy of the module with nothing cached, as a newly started instance would load it.
 async function freshInstance(): Promise<typeof import("@/lib/rate-limit")> {
@@ -82,15 +82,15 @@ describe("takeRateLimit", () => {
     expect(await db.select().from(rateLimits)).toEqual([]);
   });
 
-  it("deletes the bucket's windows older than a day, at most once a minute, and leaves other buckets alone", async () => {
+  it("deletes the bucket's windows older than ten minutes, at most once a minute, and leaves other buckets alone", async () => {
     const db = await createTestDb();
     const sweep: Limit = { bucket: "sweep-test", limit: 5, windowSeconds: 60 };
     const other: Limit = { bucket: "sweep-other", limit: 5, windowSeconds: 60 };
     const old = (offsetMs: number) => new Date(T0.getTime() - offsetMs);
     await db.insert(rateLimits).values([
-      { bucket: sweep.bucket, key: "old", windowStart: old(DAY_MS + 1000), count: 3 },
-      { bucket: sweep.bucket, key: "recent", windowStart: old(DAY_MS - 60_000), count: 3 },
-      { bucket: other.bucket, key: "old", windowStart: old(DAY_MS + 1000), count: 3 },
+      { bucket: sweep.bucket, key: "old", windowStart: old(TEN_MINUTES_MS + 1000), count: 3 },
+      { bucket: sweep.bucket, key: "recent", windowStart: old(TEN_MINUTES_MS - 60_000), count: 3 },
+      { bucket: other.bucket, key: "old", windowStart: old(TEN_MINUTES_MS + 1000), count: 3 },
     ]);
 
     await takeRateLimit(db, sweep, "caller");
@@ -101,7 +101,7 @@ describe("takeRateLimit", () => {
     expect(await keysIn(sweep.bucket)).toEqual(["caller", "recent"]);
     expect(await keysIn(other.bucket)).toEqual(["old"]);
 
-    await db.insert(rateLimits).values({ bucket: sweep.bucket, key: "later", windowStart: old(2 * DAY_MS), count: 1 });
+    await db.insert(rateLimits).values({ bucket: sweep.bucket, key: "later", windowStart: old(2 * TEN_MINUTES_MS), count: 1 });
     vi.setSystemTime(new Date(T0.getTime() + 59_000));
     await takeRateLimit(db, sweep, "caller");
     expect(await keysIn(sweep.bucket)).toEqual(["caller", "later", "recent"]);
@@ -179,6 +179,7 @@ describe("LIMITS", () => {
       groupWritePerNetwork: [600, 60],
       groupWritePerGroup: [120, 60],
       groupRead: [600, 60],
+      groupReadPerGroup: [240, 60],
     });
     const buckets = Object.values(LIMITS).map((limit) => limit.bucket);
     expect(new Set(buckets).size).toBe(buckets.length);

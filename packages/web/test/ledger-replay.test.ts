@@ -256,11 +256,12 @@ function requestFor(group: GroupView, s: Step): AddExpenseRequest {
 }
 
 // From and to can be the same member, a request the API must refuse with self_payment.
-function paymentFor(group: GroupView, s: Step): AddPaymentRequest {
+function paymentFor(group: GroupView, s: Step, planVersion: number): AddPaymentRequest {
   const ids = group.members.map((member) => member.id);
   const cur = known(s.currency);
   return {
     clientId: `replay-${crypto.randomUUID()}`,
+    planVersion,
     from: ids[s.payer % ids.length],
     to: ids[s.payee % ids.length],
     amount: formatAmount(s.amountMinor, cur),
@@ -287,9 +288,16 @@ type Sent =
   | { kind: "remove_member"; memberId: string }
   | { kind: "base"; baseCurrency: string };
 
-function sentFor(group: GroupView, s: Step, made: readonly string[], bills: readonly Bill[], extras: number): Sent {
+function sentFor(
+  group: GroupView,
+  s: Step,
+  made: readonly string[],
+  bills: readonly Bill[],
+  extras: number,
+  planVersion: number,
+): Sent {
   if (s.action === "expense") return { kind: "expense", body: requestFor(group, s) };
-  if (s.action === "payment") return { kind: "payment", body: paymentFor(group, s) };
+  if (s.action === "payment") return { kind: "payment", body: paymentFor(group, s, planVersion) };
   // A retry repeats the same name, which the unique index must refuse.
   if (s.action === "add_member") return { kind: "add_member", name: `Extra ${extras + 1}` };
   if (s.action === "remove_member") return { kind: "remove_member", memberId: group.members[s.pick % group.members.length].id };
@@ -365,7 +373,14 @@ async function exercise(seed?: number): Promise<Coverage> {
         const bills: Bill[] = [];
         let previous: Sent | null = null;
         for (const s of steps) {
-          const sent: Sent = s.retry && previous !== null ? previous : sentFor(group, s, made, bills, extras);
+          let sent: Sent;
+          if (s.retry && previous !== null) {
+            sent = previous;
+          } else {
+            // A payment is pressed on the plan as it stands after the last answer, as the page would show it.
+            const shown = s.action === "payment" ? (await readGroup(token)).version : group.version;
+            sent = sentFor(group, s, made, bills, extras, shown);
+          }
           if (sent.kind === "add_member") {
             const response = await postMember(token, { name: sent.name });
             expect([201, 400]).toContain(response.status);

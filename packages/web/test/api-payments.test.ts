@@ -1,27 +1,39 @@
-// Not covered: the page's buttons and how it builds each clientId (that needs a browser), a removed member in a
-// payment (removal is not built yet), rate limits, or the Neon driver (PGlite here, where transactions never overlap).
+// Not covered: the page's buttons and its reload after a stale answer (that needs a browser; the clientId it builds is
+// the real settleClientId from lib/client/api.ts), a removed member in a payment (removal is not built yet), rate
+// limits, or the Neon driver (PGlite here, where transactions never overlap).
 import { and, asc, count, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { type Db, setDbForTests } from "@/db/client";
 import { events, payments } from "@/db/schema";
 import { createTestDb } from "@/db/testing";
 import type {
+  AddExpenseResponse,
+  AddMemberResponse,
   AddPaymentRequest,
   AddPaymentResponse,
   CreateGroupResponse,
   GroupView,
+  TransferView,
   UndoPaymentResponse,
 } from "@/lib/api-types";
+import { newLinkToken, settleClientId } from "@/lib/client/api";
 import { mintGroupToken } from "@/lib/group-token";
 import { resolveGroup } from "@/lib/groups";
 import { addPayment, MAX_LIVE_PAYMENTS } from "@/lib/ledger-store";
 import {
+  deleteExpense,
+  deleteMember,
   deletePayment,
+  editBody,
   errorCode,
   expenseBody,
+  patchExpense,
+  patchGroup,
   paymentBody,
   postExpense,
+  postMember,
   postPayment,
+  postResetLink,
   readGroup,
   startGroup,
 } from "./fixtures";
@@ -134,7 +146,7 @@ describe("recording a payment", () => {
 
     const made: string[] = [];
     for (const transfer of plan) {
-      const body = paymentBody(group, { from: transfer.from, to: transfer.to, amount: transfer.amount });
+      const body = paymentBody(await readGroup(token), { from: transfer.from, to: transfer.to, amount: transfer.amount });
       made.push((await paid(token, body)).payment.id);
       // PGlite's clock ticks in milliseconds, so the payments are spaced to get distinct times.
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -178,6 +190,10 @@ describe("refusals", () => {
     ["invalid_body", { clientId: "short" }],
     ["invalid_body", { amount: 30 }],
     ["invalid_body", { groupId: "anything" }],
+    ["invalid_body", { planVersion: -1 }],
+    ["invalid_body", { planVersion: 1.5 }],
+    ["invalid_body", { planVersion: "1" }],
+    ["invalid_body", { planVersion: null }],
     ["bad_currency", { currency: "eur" }],
     ["amount_format", { amount: "1e3" }],
     ["amount_too_many_decimals", { amount: "1.005" }],
@@ -196,6 +212,16 @@ describe("refusals", () => {
     expect(response.status).toBe(400);
     expect(await errorCode(response)).toBe(code);
     expect(await paymentRows()).toBe(before);
+  });
+
+  it("refuses a body without planVersion with invalid_body", async () => {
+    const body: Partial<AddPaymentRequest> = paymentBody(group);
+    delete body.planVersion;
+
+    const response = await postPayment(token, body);
+
+    expect(response.status).toBe(400);
+    expect(await errorCode(response)).toBe("invalid_body");
   });
 
   it("refuses a body over 16 KB with invalid_body, before any member check could answer 404", async () => {
@@ -279,10 +305,11 @@ describe("retries", () => {
     return row.n;
   }
 
-  it("answers a repeat with 200 and the same payment, keeps one row and one event, and leaves the version", async () => {
-    const body = paymentBody(group);
+  it("answers a byte-identical repeat with 200 and the same payment after the version moved, keeps one row and one event, and leaves the version", async () => {
+    const body = paymentBody(await readGroup(token));
 
     const first = await paid(token, body, 201);
+    expect(first.group.version).toBe(body.planVersion + 1);
     const second = await paid(token, body, 200);
 
     expect(second.payment).toEqual(first.payment);
@@ -292,7 +319,7 @@ describe("retries", () => {
   });
 
   it("writes one row when the same request arrives twice at once", async () => {
-    const body = paymentBody(group);
+    const body = paymentBody(await readGroup(token));
 
     const responses = await Promise.all([postPayment(token, body), postPayment(token, body)]);
     const answers = await Promise.all(responses.map(async (r) => ({ status: r.status, ...(await r.json()) })));
@@ -303,7 +330,7 @@ describe("retries", () => {
   });
 
   it("refuses the same clientId with a different body with 409, and keeps the original", async () => {
-    const body = paymentBody(group);
+    const body = paymentBody(await readGroup(token));
     const { payment } = await paid(token, body);
 
     const response = await postPayment(token, { ...body, amount: "10.01" });
@@ -347,7 +374,7 @@ describe("undo", () => {
     expect(deleted.payload).toEqual({ paymentId: payment.id });
   });
 
-  it("lets a line that was paid, undone and shown again be paid again, because each payment moves the version", async () => {
+  it("lets a line that was paid, undone and shown again be paid again, because each payment and undo moves the version", async () => {
     const { token, group } = await groupWithDinner();
     const line = group.settlement.transfers[0];
     // The page keys a line's clientId on (version, from, to, amount); this stands in for its hash.
@@ -392,12 +419,14 @@ describe("limits", () => {
       const first = paymentBody(group, { amount: "0.01" });
       let firstId = "";
       for (let i = 0; i < MAX_LIVE_PAYMENTS; i++) {
-        const result = await addPayment(db, row, i === 0 ? first : paymentBody(group, { amount: "0.01" }));
+        // Each payment moves the version on by one, so the i-th is pressed on the plan the one before it left.
+        const body = i === 0 ? first : paymentBody(group, { amount: "0.01", planVersion: row.version + i });
+        const result = await addPayment(db, row, body);
         if (!result.ok) throw new Error(`seeding stopped at ${i}: ${result.code}`);
         if (i === 0) firstId = result.value.paymentId;
       }
 
-      const over = await postPayment(token, paymentBody(group));
+      const over = await postPayment(token, paymentBody(await readGroup(token)));
       expect(over.status).toBe(409);
       expect(await errorCode(over)).toBe("limit_reached");
 
@@ -405,8 +434,109 @@ describe("limits", () => {
       expect(retry.group.payments).toHaveLength(MAX_LIVE_PAYMENTS);
 
       await undone(token, firstId);
-      await paid(token, paymentBody(group), 201);
+      await paid(token, paymentBody(await readGroup(token)), 201);
     },
     120_000,
   );
+});
+
+describe("a plan that changed after it was shown", () => {
+  // Presses "Mark as paid" on one line of `shown` exactly as the page does: the clientId the page builds, and the
+  // version of the plan on screen.
+  async function press(token: string, shown: GroupView, line: TransferView): Promise<Response> {
+    return postPayment(token, {
+      clientId: await settleClientId(shown.version, line),
+      planVersion: shown.version,
+      from: line.from,
+      to: line.to,
+      amount: line.amount,
+      currency: shown.baseCurrency,
+      rate: null,
+    });
+  }
+
+  it("records each line once when two phones settle the same plan, and refuses the phone that never reloaded", async () => {
+    const { token } = await groupWithDinner();
+    const phoneA = await readGroup(token);
+    const phoneB = await readGroup(token);
+    expect(phoneA.settlement.transfers).toHaveLength(2);
+
+    expect((await press(token, phoneA, phoneA.settlement.transfers[0])).status).toBe(201);
+    const reloadedA = await readGroup(token);
+    expect((await press(token, reloadedA, reloadedA.settlement.transfers[0])).status).toBe(201);
+    const settled = await readGroup(token);
+    expect(settled.settlement.transfers).toEqual([]);
+
+    // Phone B still shows both lines. Its first line is the one phone A paid on the same version, so it is the same
+    // request and gets the same payment back; its second line was paid from a newer plan, so it is refused.
+    const sameLine = await press(token, phoneB, phoneB.settlement.transfers[0]);
+    expect(sameLine.status).toBe(200);
+    const otherLine = await press(token, phoneB, phoneB.settlement.transfers[1]);
+    expect(otherLine.status).toBe(409);
+    expect(await errorCode(otherLine)).toBe("stale_version");
+
+    const after = await readGroup(token);
+    expect(after.payments).toHaveLength(2);
+    expect(after).toEqual(settled);
+  });
+
+  it("refuses a press on a plan shown before a member joined, and writes nothing", async () => {
+    const { token } = await groupWithDinner();
+    const shown = await readGroup(token);
+    expect((await postMember(token, { name: "Dev" })).status).toBe(201);
+    const before = await paymentRows();
+
+    const response = await press(token, shown, shown.settlement.transfers[0]);
+
+    expect(response.status).toBe(409);
+    expect(await errorCode(response)).toBe("stale_version");
+    expect(await paymentRows()).toBe(before);
+    const current = await readGroup(token);
+    expect((await press(token, current, current.settlement.transfers[0])).status).toBe(201);
+  });
+
+  it("refuses a planVersion ahead of the group as well as behind it", async () => {
+    const { token, group } = await groupWithDinner();
+    const line = group.settlement.transfers[0];
+
+    for (const planVersion of [group.version - 1, group.version + 1, 0]) {
+      const response = await postPayment(token, paymentBody(group, { ...line, planVersion }));
+      expect([response.status, await errorCode(response)]).toEqual([409, "stale_version"]);
+    }
+    expect((await readGroup(token)).payments).toEqual([]);
+  });
+
+  it("moves the version on by one for every write that can change the plan, and leaves it for a link reset", async () => {
+    const { token } = await groupWithDinner();
+    // Sends one write and answers by how much the group's version moved.
+    const moved = async (send: (shown: GroupView) => Promise<Response>, ok: number) => {
+      const shown = await readGroup(token);
+      const response = await send(shown);
+      expect(response.status).toBe(ok);
+      return { response, by: (await readGroup(token)).version - shown.version };
+    };
+
+    const added = await moved((shown) => postExpense(token, expenseBody(shown)), 201);
+    expect(added.by).toBe(1);
+    const { expense } = (await added.response.json()) as AddExpenseResponse;
+    expect((await moved((shown) => patchExpense(token, expense.id, editBody(shown, expense.version)), 200)).by).toBe(1);
+    expect((await moved(() => deleteExpense(token, expense.id, expense.version + 1), 200)).by).toBe(1);
+    const paidOne = await moved((shown) => postPayment(token, paymentBody(shown)), 201);
+    expect(paidOne.by).toBe(1);
+    const { payment } = (await paidOne.response.json()) as AddPaymentResponse;
+    expect((await moved(() => deletePayment(token, payment.id), 200)).by).toBe(1);
+    const joined = await moved(() => postMember(token, { name: "Dev" }), 201);
+    expect(joined.by).toBe(1);
+    const { member } = (await joined.response.json()) as AddMemberResponse;
+    expect((await moved(() => deleteMember(token, member.id), 200)).by).toBe(1);
+
+    const fresh = await startGroup();
+    expect((await patchGroup(fresh.token, { baseCurrency: "USD" })).status).toBe(200);
+    expect((await readGroup(fresh.token)).version).toBe(fresh.group.version + 1);
+
+    const before = (await readGroup(token)).version;
+    const newToken = newLinkToken();
+    expect((await postResetLink(token, { newToken })).status).toBe(200);
+    expect((await readGroup(newToken)).version).toBe(before);
+  });
 });

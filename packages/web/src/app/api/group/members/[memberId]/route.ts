@@ -5,9 +5,12 @@ import type { RemoveMemberResponse } from "@/lib/api-types";
 import { buildGroupView } from "@/lib/group-view";
 import { GROUP_TOKEN_HEADER } from "@/lib/group-token";
 import { resolveGroup } from "@/lib/groups";
-import { json, notFound, serverError } from "@/lib/http";
+import { json, notFound, sendsNonJsonBody, serverError, unsupportedMediaType } from "@/lib/http";
 import { removeMember } from "@/lib/ledger-store";
 import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib/rate-limit";
+
+// Vercel stops this function after 10 s, so a stuck database or upstream call cannot hold it open (threat model C26).
+export const maxDuration = 10;
 
 // Checked before any query, because Postgres throws on a string it cannot read as a uuid. Covers the shape of the
 // id only; whether it is a member of this group is the store's question.
@@ -23,11 +26,13 @@ const MEMBER_ID = z.uuid();
  * events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
+ * 415 unsupported_media_type when the request carries a body that is not declared application/json.
  * Any other failure is a bare 500.
  */
 export async function DELETE(request: Request, { params }: { params: Promise<{ memberId: string }> }): Promise<Response> {
   // Outside the try: during a build this throws on purpose to mark the route dynamic, and must not become a 500.
   await connection();
+  if (sendsNonJsonBody(request)) return unsupportedMediaType();
   try {
     return await withDb(async (db) => {
       const network = await networkKey(db, clientNetwork(request.headers));

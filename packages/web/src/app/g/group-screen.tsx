@@ -14,10 +14,19 @@ import {
   newLinkToken,
   removeMember,
   resetLink,
+  settleClientId,
   undoPayment,
   type ApiResult,
 } from "@/lib/client/api";
-import { ALREADY_CHANGED_MESSAGE, FALLBACK_MESSAGE, cleanText, isStaleAnswer, messageFor } from "@/lib/client/messages";
+import {
+  ALREADY_CHANGED_MESSAGE,
+  FALLBACK_MESSAGE,
+  MEMBER_NAME_MAX,
+  cleanText,
+  isStaleAnswer,
+  messageFor,
+  textProblem,
+} from "@/lib/client/messages";
 import { ExpenseForm } from "./expense-form";
 
 // The format lib/group-token.ts checks on the server, repeated here because that module needs node:crypto.
@@ -145,12 +154,28 @@ function pendingResets(): PendingReset[] {
   return found;
 }
 
-// A reset whose every answer was lost may still have landed, leaving its new link only in this tab's session storage
-// (C38). When the address's link opens nothing, each kept link is tried, and the first that opens the group it was
-// kept for is that group's link now.
-async function openPendingReset(signal: AbortSignal): Promise<(PendingReset & { readonly group: GroupView }) | null> {
+// Aborts when `signal` does or after `ms`, whichever comes first. The built-in that merges signals reached browsers
+// only in 2023 and 2024 (Safari 17.4), and where it is missing the call throws, which left the page loading for good.
+function abortedByEither(signal: AbortSignal, ms: number): AbortSignal {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  const timer = setTimeout(abort, ms);
+  controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+  return controller.signal;
+}
+
+/**
+ * A reset whose every answer was lost may still have landed, leaving its new link only in this tab's session storage
+ * (C38). When the address's link opens nothing, each kept link is tried, and the first that opens the group it was
+ * kept for is that group's link now. Null when none does, or when `signal` aborts.
+ */
+export async function openPendingReset(
+  signal: AbortSignal,
+): Promise<(PendingReset & { readonly group: GroupView }) | null> {
   for (const pending of pendingResets()) {
-    const opened = await getGroup(pending.token, AbortSignal.any([signal, AbortSignal.timeout(RESET_TIMEOUT_MS)]));
+    const opened = await getGroup(pending.token, abortedByEither(signal, RESET_TIMEOUT_MS));
     if (signal.aborted) return null;
     if (opened.ok && opened.data.id === pending.groupId) return { ...pending, group: opened.data };
   }
@@ -194,15 +219,6 @@ function proofLine(payments: number, expenses: number): string {
   const paymentWords = payments === 1 ? "1 payment" : `${payments} payments`;
   const expenseWords = expenses === 1 ? "1 expense" : `${expenses} expenses`;
   return `${paymentWords} ${payments === 1 ? "settles" : "settle"} ${expenseWords}.`;
-}
-
-// The same line on the same group version always gives the same clientId, so a double press, a retry after a lost
-// answer, or two people pressing one line at once records one payment. The server moves the version with every new
-// payment, so a key is never shown again once its payment exists. Hex SHA-256 is 64 characters, the API's maximum.
-async function settleClientId(version: number, transfer: TransferView): Promise<string> {
-  const text = `settle:${version}:${transfer.from}:${transfer.to}:${transfer.amount}`;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function CopyLinkButton({ link, testId }: { readonly link: string; readonly testId?: string }) {
@@ -412,7 +428,12 @@ function MembersSection({
     event.preventDefault();
     const cleaned = cleanText(name);
     if (cleaned === "") return;
-    // The server judges length and duplicates with the same rules as group creation, so the browser does not guess.
+    // The server's own name rule runs here first, so a hidden character is named before any request; the server
+    // still judges duplicates.
+    if (textProblem(name, MEMBER_NAME_MAX) !== null) {
+      setError(messageFor("bad_member_name", { memberName: name }));
+      return;
+    }
     if (await run(() => addMember(token, { name: cleaned }))) setName("");
   }
 
@@ -531,10 +552,13 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
     }
   }
 
+  // The server moves the version with every write that can change the plan, so a line's key is never shown again once
+  // its payment exists, and a press on a plan another phone has already changed comes back stale_version.
   function markPaid(transfer: TransferView) {
     void runPaymentAction(async () =>
       addPayment(token, {
         clientId: await settleClientId(group.version, transfer),
+        planVersion: group.version,
         from: transfer.from,
         to: transfer.to,
         amount: transfer.amount,
@@ -830,7 +854,9 @@ export function GroupScreen() {
           you: readYou(result.data),
         });
       } else if (result.error === "not_found") {
-        const recovered = await openPendingReset(controller.signal);
+        // Whatever goes wrong while the kept links are tried, the address's link still opens nothing, so the page says
+        // so instead of waiting on an answer that will never come.
+        const recovered = await openPendingReset(controller.signal).catch(() => null);
         if (controller.signal.aborted) return;
         if (recovered === null) {
           setLoaded({ token, status: "not_found" });

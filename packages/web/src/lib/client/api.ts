@@ -15,6 +15,7 @@ import type {
   RemoveMemberResponse,
   ResetLinkRequest,
   ResetLinkResponse,
+  TransferView,
   UndoPaymentResponse,
 } from "@/lib/api-types";
 
@@ -31,6 +32,8 @@ function errorCode(body: unknown): string {
   return typeof error.code === "string" ? error.code : "internal";
 }
 
+// Every call declares JSON, body or not: the server answers 415 to any body that is not declared JSON, and Next.js
+// gives a DELETE a body stream even when it sends none.
 async function send<T>(path: string, init: RequestInit): Promise<ApiResult<T>> {
   let response: Response;
   try {
@@ -62,7 +65,11 @@ export function createGroup(request: CreateGroupRequest): Promise<ApiResult<Crea
 
 /** GET /api/group. The token travels only in the header, never in the URL. An unknown or reset link gives "not_found". */
 export function getGroup(token: string, signal?: AbortSignal): Promise<ApiResult<GroupView>> {
-  return send<GroupView>("/api/group", { method: "GET", headers: { [GROUP_HEADER]: token }, signal });
+  return send<GroupView>("/api/group", {
+    method: "GET",
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
+    signal,
+  });
 }
 
 /** POST /api/group/expenses. A repeat with the same clientId and body returns the first result instead of a second expense. */
@@ -99,11 +106,25 @@ export function deleteExpense(token: string, expenseId: string, version: number)
   const query = new URLSearchParams({ version: String(version) });
   return send<DeleteExpenseResponse>(`/api/group/expenses/${encodeURIComponent(expenseId)}?${query}`, {
     method: "DELETE",
-    headers: { [GROUP_HEADER]: token },
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
   });
 }
 
-/** POST /api/group/payments. A repeat with the same clientId and body returns the first result instead of a second payment. */
+/**
+ * The clientId of one settle-up line as shown on one group version: the same line on the same version always gives the
+ * same id, so a double press, a retry after a lost answer, or two people pressing one line at once records one
+ * payment. Hex SHA-256, 64 characters, the API's maximum. Rejects where crypto.subtle is missing (an insecure context).
+ */
+export async function settleClientId(version: number, transfer: TransferView): Promise<string> {
+  const text = `settle:${version}:${transfer.from}:${transfer.to}:${transfer.amount}`;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * POST /api/group/payments. A repeat with the same clientId and body returns the first result instead of a second
+ * payment. "stale_version" when the group has changed since the plan at `request.planVersion` was shown.
+ */
 export function addPayment(token: string, request: AddPaymentRequest): Promise<ApiResult<AddPaymentResponse>> {
   return send<AddPaymentResponse>("/api/group/payments", {
     method: "POST",
@@ -117,7 +138,7 @@ export function undoPayment(token: string, paymentId: string): Promise<ApiResult
   // The id came from a server response, but it is still encoded so no value can change which path is called.
   return send<UndoPaymentResponse>(`/api/group/payments/${encodeURIComponent(paymentId)}`, {
     method: "DELETE",
-    headers: { [GROUP_HEADER]: token },
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
   });
 }
 
@@ -138,7 +159,7 @@ export function removeMember(token: string, memberId: string): Promise<ApiResult
   // The id came from a server response, but it is still encoded so no value can change which path is called.
   return send<RemoveMemberResponse>(`/api/group/members/${encodeURIComponent(memberId)}`, {
     method: "DELETE",
-    headers: { [GROUP_HEADER]: token },
+    headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
   });
 }
 

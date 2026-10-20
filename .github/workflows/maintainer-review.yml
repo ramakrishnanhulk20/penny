@@ -1,0 +1,50 @@
+name: maintainer-review
+
+# A pull request that carries a robot (self-fix) commit merges only once Ram has added the
+# reviewed label after the last robot commit. Every other pull request passes at once.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: maintainer-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Named apart from the status on purpose: this job succeeds after posting "pending", so a
+  # job check called maintainer-review would satisfy the required check by its name alone.
+  review-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      statuses: write
+    steps:
+      # The default branch's copy, never the pull request's, so a pull request cannot change
+      # the gate it is judged by. The pull request that adds this file fails its own run for
+      # that reason, and the rule is switched on only after it merges.
+      - name: Check out the review gate from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: /scripts/review-gate/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Post the maintainer-review status on the head commit
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/review-gate/review-gate.mjs

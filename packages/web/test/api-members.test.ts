@@ -7,7 +7,8 @@ import { events, groups, members } from "@/db/schema";
 import { createTestDb } from "@/db/testing";
 import type { AddMemberResponse, CreateGroupResponse, GroupView, RemoveMemberResponse } from "@/lib/api-types";
 import { mintGroupToken } from "@/lib/group-token";
-import { removalBlock } from "@/lib/ledger-store";
+import { resolveGroup } from "@/lib/groups";
+import { changeBaseCurrency, removalBlock } from "@/lib/ledger-store";
 import {
   deleteExpense,
   deleteMember,
@@ -112,7 +113,7 @@ describe("adding a member", () => {
     ["bad_member_name", "a 41 character name", { name: "m".repeat(41) }],
     ["bad_member_name", "an empty name", { name: "   " }],
     ["bad_member_name", "a lone surrogate, which JSON carries as an escape", { name: "Dev\ud800" }],
-    ["bad_member_name", "a zero-width joiner", { name: "B‍en" }],
+    ["bad_member_name", "two zero-width joiners in a row", { name: "B\u200D\u200Den" }],
     ["invalid_body", "an unknown field", { name: "Dev", position: 0 }],
     ["invalid_body", "a missing name", {}],
     ["invalid_body", "a number for the name", { name: 7 }],
@@ -230,13 +231,17 @@ describe("removing a member", () => {
       expect(gone.status).toBe(201);
       const { expense } = await gone.json();
       expect((await deleteExpense(token, expense.id, expense.version)).status).toBe(200);
-      const undone = await postPayment(token, paymentBody(g, { from: idOf(g, "Chen"), to: idOf(g, "Dev"), amount: "5.00" }));
+      const undone = await postPayment(
+        token,
+        paymentBody(await readGroup(token), { from: idOf(g, "Chen"), to: idOf(g, "Dev"), amount: "5.00" }),
+      );
       expect(undone.status).toBe(201);
       expect((await deletePayment(token, (await undone.json()).payment.id)).status).toBe(200);
       const split = { mode: "equal" as const, members: [idOf(g, "Eli"), idOf(g, "Fay")] };
       expect((await postExpense(token, expenseBody(g, { amount: "12.00", paidBy: idOf(g, "Eli"), split }))).status).toBe(201);
       expect(
-        (await postPayment(token, paymentBody(g, { from: idOf(g, "Gus"), to: idOf(g, "Hal"), amount: "3.00" }))).status,
+        (await postPayment(token, paymentBody(await readGroup(token), { from: idOf(g, "Gus"), to: idOf(g, "Hal"), amount: "3.00" })))
+          .status,
       ).toBe(201);
     });
 
@@ -345,6 +350,23 @@ describe("changing the base currency", () => {
     const response = await patchGroup(token, { baseCurrency: "EUR" });
 
     expect(response.status).toBe(200);
+    expect(await stateOf(token)).toEqual(before);
+  });
+
+  it("answers the base it already has with 200 and changed: false once the group has had money, and writes nothing", async () => {
+    const { token, group } = await startGroup();
+    expect((await postExpense(token, expenseBody(group))).status).toBe(201);
+    const before = await stateOf(token);
+    expect(before.view.baseLocked).toBe(true);
+
+    const response = await patchGroup(token, { baseCurrency: "EUR" });
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { group: GroupView }).group).toEqual(before.view);
+    expect(await stateOf(token)).toEqual(before);
+    const row = await resolveGroup(db, token);
+    if (row === null) throw new Error("the group did not resolve");
+    expect(await changeBaseCurrency(db, row, { baseCurrency: "EUR" })).toEqual({ ok: true, value: { changed: false } });
     expect(await stateOf(token)).toEqual(before);
   });
 

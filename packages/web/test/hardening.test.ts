@@ -4,6 +4,9 @@
 // (a named non-goal in the threat model); and what a browser does with the security headers, since only the header
 // strings are checked, not a page loading under them or the Vercel toolbar working on a preview.
 import { createHmac } from "node:crypto";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { count, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import nextConfig from "../next.config";
@@ -66,7 +69,8 @@ type Send = { method?: string; token?: string; body?: unknown };
 function request(path: string, address: string, { method = "GET", token, body }: Send = {}): Request {
   const headers = new Headers({ "x-vercel-forwarded-for": address });
   if (token !== undefined) headers.set(GROUP_TOKEN_HEADER, token);
-  if (body !== undefined) headers.set("content-type", "application/json");
+  // As the browser's calls do: every write declares JSON, with a body or without one.
+  if (body !== undefined || method !== "GET") headers.set("content-type", "application/json");
   return new Request(`http://localhost${path}`, {
     method,
     headers,
@@ -251,6 +255,23 @@ describe("rate limits on every route", () => {
     expect((await send(token, group)).status).toBe(429);
   });
 
+  it("allows 240 reads of one group a minute from any network, then answers 429, and an unknown token still gets 404", async () => {
+    const { token, group } = await startGroup();
+    const read = (current: string) => getGroupRoute(request("/api/group", freshAddress(), { token: current }));
+    await fill(LIMITS.groupReadPerGroup, group.id, LIMITS.groupReadPerGroup.limit - 1);
+
+    expect((await read(token)).status).toBe(200);
+    const refused = await read(token);
+    expect(refused.status).toBe(429);
+    expect(refused.headers.get("Retry-After")).toBe("60");
+    expect(await refused.text()).toBe(RATE_LIMITED);
+    expect((await read(mintGroupToken().token)).status).toBe(404);
+    expect((await read((await startGroup()).token)).status).toBe(200);
+
+    vi.setSystemTime(new Date(T0.getTime() + 60_000));
+    expect((await read(token)).status).toBe(200);
+  });
+
   it("stores no raw address: every network key is the HMAC under the server key, every group key a group id", async () => {
     const addresses = ["203.0.113.7", "2001:db8:aa:bb::1"];
     const { token, group } = await startGroup();
@@ -271,8 +292,22 @@ describe("rate limits on every route", () => {
     }
     expect(rows).toContainEqual(expect.objectContaining({ bucket: LIMITS.groupWritePerGroup.bucket, key: group.id }));
     for (const row of rows) {
-      expect(row.key).toMatch(row.bucket === LIMITS.groupWritePerGroup.bucket ? UUID : /^[0-9a-f]{64}$/);
+      const perGroup = [LIMITS.groupWritePerGroup.bucket, LIMITS.groupReadPerGroup.bucket].includes(row.bucket);
+      expect(row.key).toMatch(perGroup ? UUID : /^[0-9a-f]{64}$/);
       for (const raw of [...addresses, "ip4:", "ip6:", "unknown"]) expect(row.key).not.toContain(raw);
+    }
+  });
+});
+
+describe("time limits", () => {
+  it("sets maxDuration to 10 seconds in every route file under src/app/api", async () => {
+    const api = join(__dirname, "..", "src", "app", "api");
+    const files = readdirSync(api, { recursive: true, encoding: "utf8" }).filter((name) => name.endsWith("route.ts"));
+    expect(files.length).toBeGreaterThanOrEqual(13);
+
+    for (const file of files) {
+      const route = (await import(pathToFileURL(join(api, file)).href)) as { maxDuration?: unknown };
+      expect([file, route.maxDuration]).toEqual([file, 10]);
     }
   });
 });

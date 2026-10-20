@@ -44,8 +44,12 @@ function liveLine(live: ChecksSnapshot["live"]): string {
     : `This site runs commit ${short} from pull request #${live.pr}.`;
 }
 
-function verdictLine(pr: PrCheck): string {
+/** The TestSprite line under one pull request, from its verdict and counts alone. */
+export function verdictLine(pr: PrCheck): string {
   const blocked = pr.blocked !== null && pr.blocked > 0 ? `, ${pr.blocked} blocked` : "";
+  if (pr.verdict === "blocked" && pr.blocked !== null && pr.total !== null) {
+    return `TestSprite: blocked, ${pr.blocked} of ${pr.total} could not run`;
+  }
   if (pr.verdict === "passed" && pr.passed !== null && pr.total !== null) {
     return `TestSprite: passed, ${pr.passed} of ${pr.total}${blocked}`;
   }

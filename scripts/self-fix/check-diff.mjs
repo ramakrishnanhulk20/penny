@@ -4,20 +4,29 @@ import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const MAX_CHANGED_LINES = 200;
+export const MAX_PATCH_BYTES = 200_000;
+export const MAX_LISTED_PATHS = 30;
 
 export const RULES = {
   "empty-patch": "The agent proposed no change.",
   malformed: "The patch could not be read with certainty, so it was refused.",
   "path-not-allowed": "Only files under packages/web/src or packages/core/src may change.",
   "path-denied":
-    "The patch touches a file the self-fix may never change: a test, a config, a package or lock file, an env file, an agent instruction or settings file, or a security module.",
+    "The patch touches a file the self-fix may never change: a test, a config, a package or lock file, an agent instruction file, a security module, anything in a node_modules folder, or a file or folder whose name starts with a dot, such as .env, .git or .claude.",
+  "file-type": "Only .ts, .tsx and .css files may change.",
+  "new-endpoint": "The patch adds a route handler, middleware or proxy file, which would open a new way into the server.",
+  "shadows-denied":
+    "The patch adds a file that could be loaded in place of a security module: the same name with another extension, or a folder with that name.",
   deletion: "The patch deletes a file.",
   rename: "The patch renames or copies a file.",
   "mode-change": "The patch changes a file mode or adds a file that is not a plain file.",
   binary: "The patch adds or changes a binary file.",
-  "too-large": `The patch changes more than ${MAX_CHANGED_LINES} lines.`,
-  "secret-pattern": "An added line looks like a secret or an encoded secret.",
-  "process-env": "An added line reads environment variables.",
+  "too-large": `The patch changes more than ${MAX_CHANGED_LINES} lines or is larger than ${MAX_PATCH_BYTES.toLocaleString("en-US")} bytes.`,
+  "secret-pattern": "An added line or a file path looks like a secret or an encoded secret.",
+  "hidden-characters":
+    "An added line holds an invisible or text-direction character, which can make code read differently from how it runs.",
+  "process-env":
+    "An added line names the process or global object, the server's env module or database settings, or a way to run text as code (eval, Function, require, import.meta).",
   "git-disagrees": "Git reads the patch differently from the checker.",
 };
 
@@ -32,6 +41,12 @@ const DENIED_FILES = new Set([
   "packages/web/src/lib/api-schemas.ts",
 ]);
 const DENIED_DIRS = ["packages/web/src/db/"];
+// An import names a module without its extension, and the bundler tries .js before .ts, so a
+// new groups.js or groups/index.ts would be loaded in place of groups.ts. Compared in lower
+// case, and up to the first dot, so groups.d.ts and Groups.tsx count as the same name.
+const PROTECTED_MODULES = new Set(
+  [...DENIED_FILES, ...DENIED_DIRS.map((dir) => dir.slice(0, -1))].map((path) => withoutExtensions(path.toLowerCase())),
+);
 // Names compared in lower case so a case variant on a case-insensitive disk cannot slip by.
 const DENIED_BASENAMES = new Set([
   "package.json",
@@ -43,9 +58,14 @@ const DENIED_BASENAMES = new Set([
   "claude.md",
   "claude.local.md",
   "agents.md",
-  ".mcp.json",
 ]);
-const DENIED_SEGMENTS = new Set([".claude", ".github", ".git", "__tests__"]);
+// Node resolves a bare import from the nearest node_modules folder up the tree, so a folder
+// of that name under src would replace a real package. Dot names cover .git, .github,
+// .claude, .env files and the .gitignore that could un-ignore such a folder.
+const DENIED_SEGMENTS = new Set(["__tests__", "node_modules"]);
+const ALLOWED_EXTENSIONS = [".ts", ".tsx", ".css"];
+// Next.js turns a file with one of these names into server code that answers requests.
+const ENDPOINT_NAMES = new Set(["route", "middleware", "proxy", "instrumentation", "instrumentation-client"]);
 const SAFE_PATH = /^[A-Za-z0-9._@()[\]-]+(?:\/[A-Za-z0-9._@()[\]-]+)*$/;
 
 class Refusal extends Error {
@@ -150,10 +170,32 @@ export function isDeniedPath(path) {
   if (DENIED_DIRS.some((dir) => path.startsWith(dir))) return true;
   const segments = path.toLowerCase().split("/");
   const base = segments.at(-1);
-  if (segments.some((segment) => DENIED_SEGMENTS.has(segment))) return true;
+  if (segments.some((segment) => DENIED_SEGMENTS.has(segment) || segment.startsWith("."))) return true;
   if (DENIED_BASENAMES.has(base)) return true;
-  if (base.startsWith(".env")) return true;
   return /\.(test|spec|config)\./.test(base);
+}
+
+export function hasAllowedFileType(path) {
+  return ALLOWED_EXTENSIONS.some((extension) => path.endsWith(extension));
+}
+
+export function isEndpointFile(path) {
+  return ENDPOINT_NAMES.has(path.split("/").at(-1).toLowerCase().split(".")[0]);
+}
+
+function withoutExtensions(path) {
+  const slash = path.lastIndexOf("/");
+  return path.slice(0, slash + 1) + path.slice(slash + 1).split(".")[0];
+}
+
+/**
+ * True when the path, or any folder on it, has a protected module's name once extensions
+ * are dropped: `lib/groups.tsx`, `lib/group-token.js`, `lib/groups/index.ts`, `src/db.ts`.
+ * Does not cover a module reached through a different import path, such as a new alias.
+ */
+export function shadowsProtectedModule(path) {
+  const segments = path.toLowerCase().split("/");
+  return segments.some((segment, i) => PROTECTED_MODULES.has(withoutExtensions([...segments.slice(0, i), segment].join("/"))));
 }
 
 const SECRET_MARKERS = [
@@ -183,13 +225,49 @@ export function looksLikeSecret(line) {
 }
 
 /**
- * Covers `process.env` and its spellings (`process["env"]`, `process?.env`, `{ env } =
- * process`) whenever the words process and env share a line, plus `import.meta.env`.
- * Does not cover environment access through an alias defined on another line.
+ * Covers every Unicode format character (category Cf), which includes the bidirectional
+ * controls U+202A to U+202E and U+2066 to U+2069, the zero-width U+200B to U+200F, U+FEFF
+ * and the soft hyphen U+00AD, plus the line and paragraph separators U+2028 and U+2029,
+ * which end a JavaScript comment without starting a visible new line. Does not cover
+ * characters that are visible but look alike, such as a Cyrillic letter in a word.
+ */
+export function hasHiddenCharacters(line) {
+  return /[\p{Cf}\p{Zl}\p{Zp}]/u.test(line);
+}
+
+const SERVER_SECRET_SIGNS = [
+  /process/,
+  /globalThis/,
+  /serverEnv/,
+  /DATABASE_URL/,
+  /connectionString/,
+  /import\s*\.\s*meta/,
+  /eval\s*\(/,
+  /Function\s*\(/,
+  /require\s*\(/,
+  // The audit's follow-up bypasses: the bare global object, a Function reached through any
+  // constructor, a computed dynamic import, the database driver's own options, server actions.
+  /\bglobal\s*[[.]/,
+  /constructor/,
+  /\bimport\s*\(/,
+  /\$client/,
+  /["'`]use server["'`]/,
+  // Any quoted module path whose last part is env: "@/lib/env", "./env", "../lib/env.ts".
+  /["'`][^"'`]*\/env(?:\.[^"'`/]*)?["'`]/i,
+];
+
+/**
+ * Covers any line that names the process object or the global object (so an alias made on
+ * this line and used on the next is caught where it is made), the env module and its
+ * serverEnv helper, the database URL and connection string, import.meta, and eval, Function
+ * and require calls, with or without spaces before the bracket. Matches text anywhere in the
+ * line, so it also refuses comments and copy that contain these words. Does not cover the
+ * global object reached under another name (`global`, `[].constructor.constructor`), a
+ * dynamic `import()` of a built-up path, identifier escapes such as `globalThis`, or
+ * the database client's own settings read through `withDb`.
  */
 export function readsEnvironment(line) {
-  if (line.includes("import.meta.env")) return true;
-  return /\bprocess\b/.test(line) && /\benv\b/.test(line);
+  return SERVER_SECRET_SIGNS.some((pattern) => pattern.test(line));
 }
 
 /**
@@ -197,6 +275,7 @@ export function readsEnvironment(line) {
  *   | { ok: false, rule: string }}
  */
 export function checkPatch(text) {
+  if (Buffer.byteLength(text, "utf8") > MAX_PATCH_BYTES) return { ok: false, rule: "too-large" };
   let files;
   try {
     files = parsePatch(text);
@@ -212,6 +291,11 @@ export function checkPatch(text) {
     seen.add(file.path);
     if (!isAllowedPath(file.path)) return { ok: false, rule: "path-not-allowed" };
     if (isDeniedPath(file.path)) return { ok: false, rule: "path-denied" };
+    if (file.isNew && shadowsProtectedModule(file.path)) return { ok: false, rule: "shadows-denied" };
+    if (file.isNew && isEndpointFile(file.path)) return { ok: false, rule: "new-endpoint" };
+    if (!hasAllowedFileType(file.path)) return { ok: false, rule: "file-type" };
+    // A path is pushed and posted in the comment just like an added line.
+    if (looksLikeSecret(file.path)) return { ok: false, rule: "secret-pattern" };
   }
 
   const changedLines = files.reduce((sum, file) => sum + file.addedCount + file.removedCount, 0);
@@ -219,6 +303,7 @@ export function checkPatch(text) {
 
   for (const file of files) {
     for (const line of file.added) {
+      if (hasHiddenCharacters(line)) return { ok: false, rule: "hidden-characters" };
       if (looksLikeSecret(line)) return { ok: false, rule: "secret-pattern" };
       if (readsEnvironment(line)) return { ok: false, rule: "process-env" };
     }
@@ -254,7 +339,10 @@ export function agreesWithGit(files, numstat) {
 
 export function commentFor(result) {
   if (result.ok) {
-    const list = result.files.map((file) => `- \`${file.path}\`${file.isNew ? " (new)" : ""}`).join("\n");
+    const shown = result.files.slice(0, MAX_LISTED_PATHS).map((file) => `- \`${file.path}\`${file.isNew ? " (new)" : ""}`);
+    const hidden = result.files.length - shown.length;
+    if (hidden > 0) shown.push(`- and ${hidden} more ${hidden === 1 ? "file" : "files"}`);
+    const list = shown.join("\n");
     return `The self-fix changed these files to make the failing TestSprite tests pass:\n\n${list}\n\nTestSprite will test the new preview. A person merges.\n`;
   }
   return `The self-fix checker refused this attempt, so nothing was pushed.\n\nRule: \`${result.rule}\`. ${RULES[result.rule]}\n`;
