@@ -155,14 +155,28 @@ export function changeBaseCurrency(
 }
 
 /**
- * POST /api/group/reset-link. On success the body carries the new link token, which the caller puts only in the
- * address fragment. The old token answers "not_found" from then on, for everyone.
+ * A new link token made in this browser: 16 bytes from crypto.getRandomValues, written as base64url without padding,
+ * which is always 22 characters, the format lib/group-token.ts checks.
  */
-export function resetLink(token: string): Promise<ApiResult<ResetLinkResponse>> {
-  const request: ResetLinkRequest = {};
+export function newLinkToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+/**
+ * POST /api/group/reset-link, moving the group to `newToken` (from newLinkToken). The caller keeps `newToken` before
+ * calling, because the answer carries only the group. Sending the same request again after a lost answer succeeds
+ * and changes nothing more. The old token answers "not_found" from then on, for everyone.
+ */
+export function resetLink(token: string, newToken: string, signal?: AbortSignal): Promise<ApiResult<ResetLinkResponse>> {
+  const request: ResetLinkRequest = { newToken };
   return send<ResetLinkResponse>("/api/group/reset-link", {
     method: "POST",
     headers: { "Content-Type": "application/json", [GROUP_HEADER]: token },
     body: JSON.stringify(request),
+    signal,
   });
 }

@@ -14,7 +14,8 @@ import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib
  * 201 { member, group }.
  * 400 invalid_body, bad_member_name (empty, over 40 characters, or holding a control or format character) or
  * duplicate_member_name (a current member has the same name, letter case and Unicode form ignored).
- * 404 not_found for an unknown token. 409 too_many_members once the group has 20 members.
+ * 404 not_found for an unknown token. 409 too_many_members once the group has 20 members, or limit_reached once it
+ * holds MAX_EVENTS events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
  * Any other failure is a bare 500.

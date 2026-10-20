@@ -80,9 +80,9 @@ Any unexpected failure shows "Something went wrong. Try again." While the group 
 - "Edit" fills the same form with that expense, under the heading "Edit expense", with the buttons "Save changes" and "Cancel". "Save changes" updates it. Once the change is saved, or after "Cancel", the form is back to "Add an expense", empty. If someone else changed it first: "This expense was changed by someone else. Reload to see the latest."
 - "Delete" asks "Delete this expense?" with "Delete" and "Cancel". If someone else changed it first, the same message shows and the expense stays.
 
-**Payments** list: "<From> paid <To> <amount> <BASE>", each with "Undo".
+**Payments** list: "<From> paid <To> <amount> <BASE>", each with "Undo". If someone else paid, undid or changed it first, "Mark as paid" or "Undo" loads the latest group and shows "This was already changed. Showing the latest."
 
-**Reset link**: asks "Make a new link? The old link will stop working for everyone." with "Make new link" and "Cancel". After confirming, the page shows "New link made. The old link no longer works. Share this one:" followed by the new link and a "Copy link" button, and the old link opens the not-found page.
+**Reset link**: asks "Make a new link? The old link will stop working for everyone." with "Make new link" and "Cancel". After confirming, the page shows "New link made. The old link no longer works. Share this one:" followed by the new link and a "Copy link" button, and the old link opens the not-found page. The browser makes the new link before it asks, so a dropped connection cannot lose it: on a failure or timeout the page asks once more, then checks whether the new link already opens the group, and if it does, shows it as above.
 
 **Members** section, after Balances, one row per member: a "New member" field with "Add member" adds a member (same name rules; errors "Each member needs a different name.", "Names can be at most 40 characters.", and "A group can have at most 20 members."). "Remove" next to a member is offered only for members with a zero balance who appear in no expense or payment (deleted ones included), and only while the group has more than two members; otherwise the button is absent. If the member gained an expense or payment before "Remove" landed: "Only a member with no expenses or payments can be removed."
 
@@ -107,6 +107,8 @@ A public page showing how Penny is tested. For the version that is live right no
 ## Limits
 
 - 2 to 20 members per group; 500 expenses and 500 payments per group.
+- Over a group's whole life: 2,000 expenses (deleted ones included), 2,000 payments (undone ones included) and 10,000 changes of any kind. A group past one of these can still be opened and read, but not changed in that way; past 10,000 changes, not changed at all except that its link can still be reset (so a leaked link can always be cut off; resets stay limited to 120 a minute per group).
+- A change refused by one of the expense, payment or change limits shows "This group has reached its size limit."
 - Amounts up to 10^12 of the currency's smallest unit (10,000,000,000.00 in a two-decimal currency).
 - Rates above 0 and up to 1,000,000, with at most 10 decimals.
 

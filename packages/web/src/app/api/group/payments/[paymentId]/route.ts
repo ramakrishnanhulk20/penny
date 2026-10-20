@@ -17,7 +17,7 @@ const PAYMENT_ID = z.uuid();
  * Undoes one payment of the group named by the x-penny-group header.
  * 200 { group } once the payment is undone, and the same 200 with nothing written when it already was.
  * 404 not_found, byte for byte the same, for an unknown token, an id that is not a uuid, or a payment of another
- * group.
+ * group. 409 limit_reached once the group holds MAX_EVENTS events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
  * Any other failure is a bare 500.

@@ -2,7 +2,7 @@
 
 import { listCurrencies } from "@penny/core";
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
 import { FieldError } from "@/components/field-error";
 import type { ExpenseView, GroupView, TransferView } from "@/lib/api-types";
 import {
@@ -11,18 +11,23 @@ import {
   changeBaseCurrency,
   deleteExpense,
   getGroup,
+  newLinkToken,
   removeMember,
   resetLink,
   undoPayment,
   type ApiResult,
 } from "@/lib/client/api";
-import { FALLBACK_MESSAGE, cleanText, messageFor } from "@/lib/client/messages";
+import { ALREADY_CHANGED_MESSAGE, FALLBACK_MESSAGE, cleanText, isStaleAnswer, messageFor } from "@/lib/client/messages";
 import { ExpenseForm } from "./expense-form";
 
 // The format lib/group-token.ts checks on the server, repeated here because that module needs node:crypto.
 // A fragment that fails it never leaves the browser.
 const TOKEN_FORMAT = /^[A-Za-z0-9_-]{22}$/;
 const COPIED_FOR_MS = 2000;
+const RESET_TIMEOUT_MS = 10_000;
+const PENDING_RESET_PREFIX = "penny:pending-reset:";
+// Each kept link costs one group read when the address's link opens nothing, so only this many keys are looked at.
+const PENDING_RESETS_TRIED = 5;
 const CURRENCY_CODES = listCurrencies().map((cur) => cur.code);
 
 type Ready = {
@@ -89,6 +94,92 @@ function saveYou(groupId: string, memberId: string): void {
   } catch {
     // The choice is a convenience on this device only, so losing it does no harm.
   }
+}
+
+// The one link token that sits in storage, and only in this tab's session storage until its reset is confirmed: kept
+// before the reset is sent, so an answer lost on the way back cannot lose the only copy of the new link (C38).
+function keepPendingReset(groupId: string, newToken: string): void {
+  try {
+    window.sessionStorage.setItem(`${PENDING_RESET_PREFIX}${groupId}`, newToken);
+  } catch {
+    // Storage is switched off. This attempt still holds the token in memory through its retry and its check.
+  }
+}
+
+// Read back as untrusted: anything not in the link format counts as nothing kept.
+function readPendingReset(groupId: string): string | null {
+  try {
+    const kept = window.sessionStorage.getItem(`${PENDING_RESET_PREFIX}${groupId}`);
+    return kept !== null && TOKEN_FORMAT.test(kept) ? kept : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingReset(groupId: string): void {
+  try {
+    window.sessionStorage.removeItem(`${PENDING_RESET_PREFIX}${groupId}`);
+  } catch {
+    // Storage is switched off, so nothing was kept.
+  }
+}
+
+type PendingReset = { readonly groupId: string; readonly token: string };
+
+function pendingResets(): PendingReset[] {
+  const found: PendingReset[] = [];
+  try {
+    const storage = window.sessionStorage;
+    let seen = 0;
+    for (let index = 0; index < storage.length && seen < PENDING_RESETS_TRIED; index += 1) {
+      const key = storage.key(index);
+      if (key === null || !key.startsWith(PENDING_RESET_PREFIX)) continue;
+      seen += 1;
+      const groupId = key.slice(PENDING_RESET_PREFIX.length);
+      const token = readPendingReset(groupId);
+      if (token !== null) found.push({ groupId, token });
+    }
+  } catch {
+    // Storage is switched off, so nothing was kept.
+  }
+  return found;
+}
+
+// A reset whose every answer was lost may still have landed, leaving its new link only in this tab's session storage
+// (C38). When the address's link opens nothing, each kept link is tried, and the first that opens the group it was
+// kept for is that group's link now.
+async function openPendingReset(signal: AbortSignal): Promise<(PendingReset & { readonly group: GroupView }) | null> {
+  for (const pending of pendingResets()) {
+    const opened = await getGroup(pending.token, AbortSignal.any([signal, AbortSignal.timeout(RESET_TIMEOUT_MS)]));
+    if (signal.aborted) return null;
+    if (opened.ok && opened.data.id === pending.groupId) return { ...pending, group: opened.data };
+  }
+  return null;
+}
+
+// The reset is sent, and sent once more if it fails or times out. If that fails too, the reset may still have landed
+// with its answer lost, so the new token itself is tried: when it opens this group, it is the group's link now.
+// A later press sends the token an earlier one kept: if that reset landed unseen, the server answers the dead link only
+// for that token, and a fresh one would be refused. A kept token that is already the page's link is not pending.
+async function makeNewLink(
+  token: string,
+  groupId: string,
+): Promise<ApiResult<{ readonly token: string; readonly group: GroupView }>> {
+  const kept = readPendingReset(groupId);
+  const newToken = kept !== null && kept !== token ? kept : newLinkToken();
+  keepPendingReset(groupId, newToken);
+  let sent = await resetLink(token, newToken, AbortSignal.timeout(RESET_TIMEOUT_MS));
+  if (!sent.ok) sent = await resetLink(token, newToken, AbortSignal.timeout(RESET_TIMEOUT_MS));
+  if (sent.ok) {
+    clearPendingReset(groupId);
+    return { ok: true, data: { token: newToken, group: sent.data.group } };
+  }
+  const opened = await getGroup(newToken, AbortSignal.timeout(RESET_TIMEOUT_MS));
+  if (opened.ok && opened.data.id === groupId) {
+    clearPendingReset(groupId);
+    return { ok: true, data: { token: newToken, group: opened.data } };
+  }
+  return sent;
 }
 
 // Balances arrive as exact decimal strings such as "-12.00". Reading the sign and the digits as text keeps every
@@ -158,9 +249,11 @@ function LinkNotFound() {
 
 function ResetLinkButton({
   token,
+  groupId,
   onLinkReset,
 }: {
   readonly token: string;
+  readonly groupId: string;
   readonly onLinkReset: (token: string, group: GroupView) => void;
 }) {
   const errorId = useId();
@@ -176,7 +269,13 @@ function ResetLinkButton({
     inFlight.current = true;
     setPending(true);
     setError(undefined);
-    const result = await resetLink(token);
+    let result: ApiResult<{ readonly token: string; readonly group: GroupView }>;
+    try {
+      result = await makeNewLink(token, groupId);
+    } catch {
+      // The API calls never throw, so this is the browser refusing to make the token, before any request left.
+      result = { ok: false, error: "internal" };
+    }
     inFlight.current = false;
     setPending(false);
     setConfirming(false);
@@ -416,10 +515,20 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
       // before any request left.
       result = { ok: false, error: "internal" };
     }
+    // Someone else paid, undid or changed this first. Loaded while the buttons stay disabled, so no press lands on the
+    // old plan in between.
+    let latest: ApiResult<GroupView> | null = null;
+    if (!result.ok && isStaleAnswer(result.error)) latest = await getGroup(token);
     paymentInFlight.current = false;
     setPaymentPending(false);
-    if (result.ok) onSaved(result.data.group);
-    else setPaymentError(messageFor(result.error));
+    if (result.ok) {
+      onSaved(result.data.group);
+    } else if (latest !== null && latest.ok && latest.data.id === group.id) {
+      onSaved(latest.data);
+      setPaymentError(ALREADY_CHANGED_MESSAGE);
+    } else {
+      setPaymentError(messageFor(result.error));
+    }
   }
 
   function markPaid(transfer: TransferView) {
@@ -481,7 +590,8 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
         <h1 data-testid="group-title">{group.name}</h1>
         <p data-testid="group-base-label">{`Balances in ${base}`}</p>
         <div>
-          <CopyLinkButton link={link} testId="copy-link" /> <ResetLinkButton token={token} onLinkReset={onLinkReset} />
+          <CopyLinkButton link={link} testId="copy-link" />{" "}
+          <ResetLinkButton token={token} groupId={group.id} onLinkReset={onLinkReset} />
         </div>
       </header>
 
@@ -667,7 +777,10 @@ function GroupBoard({ ready, onYouChange, onSaved, onLinkReset }: GroupBoardProp
 
 /**
  * The group page. The link token is read from the address fragment and sent only in the x-penny-group header;
- * it is never rendered, logged, stored or used as a React key. A new fragment loads the group it names.
+ * it is never logged or used as a React key, and the only token ever stored is a reset's next one, in this tab's
+ * session storage until that reset is confirmed. A new fragment loads the group it names. When it opens nothing, the
+ * links this tab kept for unconfirmed resets are tried before the not-found page, and one that opens its group is
+ * shown as that group's new link.
  */
 export function GroupScreen() {
   const token = useSyncExternalStore<string | null | undefined>(subscribeToHash, tokenFromHash, tokenOnServer);
@@ -675,6 +788,22 @@ export function GroupScreen() {
   // The token a reset just put in the address. Its group is already on screen, and loading it again would drop the
   // new-link banner.
   const adopted = useRef<string | null>(null);
+
+  // Stable, so the load effect below can adopt a kept link without running again on every render.
+  const linkWasReset = useCallback((newToken: string, group: GroupView) => {
+    // replaceState swaps the address without a hashchange or a new history entry, so Back never offers the dead link.
+    window.history.replaceState(null, "", "/g#" + newToken);
+    adopted.current = newToken;
+    setLoaded({
+      token: newToken,
+      status: "ready",
+      group,
+      link: `${window.location.origin}/g#${newToken}`,
+      created: false,
+      linkReset: true,
+      you: readYou(group),
+    });
+  }, []);
 
   useEffect(() => {
     if (typeof token !== "string") return;
@@ -684,11 +813,13 @@ export function GroupScreen() {
     }
     const controller = new AbortController();
     const created = createdFlagIsSet();
-    void getGroup(token, controller.signal).then((result) => {
+    void getGroup(token, controller.signal).then(async (result) => {
       if (controller.signal.aborted) return;
       if (result.ok) {
         // Cleared only once the group is on screen: in development React runs this effect twice and drops the first run.
         if (created) clearCreatedFlag();
+        // The kept link has opened its own group, so its reset is no longer pending.
+        if (readPendingReset(result.data.id) === token) clearPendingReset(result.data.id);
         setLoaded({
           token,
           status: "ready",
@@ -699,13 +830,20 @@ export function GroupScreen() {
           you: readYou(result.data),
         });
       } else if (result.error === "not_found") {
-        setLoaded({ token, status: "not_found" });
+        const recovered = await openPendingReset(controller.signal);
+        if (controller.signal.aborted) return;
+        if (recovered === null) {
+          setLoaded({ token, status: "not_found" });
+        } else {
+          clearPendingReset(recovered.groupId);
+          linkWasReset(recovered.token, recovered.group);
+        }
       } else {
         setLoaded({ token, status: "failed" });
       }
     });
     return () => controller.abort();
-  }, [token]);
+  }, [token, linkWasReset]);
 
   function changeYou(memberId: string) {
     if (loaded === null || loaded.status !== "ready") return;
@@ -722,21 +860,6 @@ export function GroupScreen() {
     setLoaded((current) =>
       current !== null && current.status === "ready" && current.group.id === group.id ? { ...current, group } : current,
     );
-  }
-
-  function linkWasReset(newToken: string, group: GroupView) {
-    // replaceState swaps the address without a hashchange or a new history entry, so Back never offers the dead link.
-    window.history.replaceState(null, "", "/g#" + newToken);
-    adopted.current = newToken;
-    setLoaded({
-      token: newToken,
-      status: "ready",
-      group,
-      link: `${window.location.origin}/g#${newToken}`,
-      created: false,
-      linkReset: true,
-      you: readYou(group),
-    });
   }
 
   if (token === undefined) return <p>Loading the group...</p>;

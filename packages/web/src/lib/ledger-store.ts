@@ -35,14 +35,21 @@ import {
   type CreateGroupBody,
   type EditExpenseBody,
 } from "./api-schemas";
-import { mintGroupToken } from "./group-token";
-import { rotateGroupToken } from "./groups";
+import { hashGroupToken, mintGroupToken } from "./group-token";
 import { nameKey } from "./text";
 
 /** Live expenses one group may hold (threat model C26). Adding the 501st is refused. */
 export const MAX_LIVE_EXPENSES = 500;
 /** Live payments one group may hold (threat model C26). Adding the 501st is refused; an undone one frees its place. */
 export const MAX_LIVE_PAYMENTS = 500;
+/**
+ * Events one group's log may hold (threat model C26). Once it has this many, every write but a link reset is refused.
+ */
+export const MAX_EVENTS = 10_000;
+/** Expense rows one group may hold, deleted ones included (threat model C26). A delete frees no place. */
+export const MAX_EXPENSE_ROWS = 2_000;
+/** Payment rows one group may hold, undone ones included (threat model C26). An undo frees no place. */
+export const MAX_PAYMENT_ROWS = 2_000;
 
 export type Refusal = { ok: false; status: 400 | 404 | 409; code: string };
 export type StoreResult<T> = { ok: true; value: T } | Refusal;
@@ -126,6 +133,7 @@ const STALE_VERSION = refuse(409, "stale_version");
 const MEMBER_IN_USE = refuse(409, "member_in_use");
 const TOO_FEW_MEMBERS = refuse(409, "too_few_members");
 const TOO_MANY_MEMBERS = refuse(409, "too_many_members");
+const LIMIT_REACHED = refuse(409, "limit_reached");
 // members.position is a smallint, and a removed member keeps their position, so positions only ever grow.
 const MAX_POSITION = 32_767;
 
@@ -362,6 +370,22 @@ async function lockGroup(tx: Db, group: GroupRow): Promise<GroupRow | null> {
   return row;
 }
 
+// Deleted expenses, undone payments and the log keep their rows for good, so the live caps alone would let a group grow
+// without end. Run under the group row lock and before anything is written. `adding` names the row the write adds.
+async function historyFull(tx: Db, groupId: string, adding?: "expense" | "payment"): Promise<boolean> {
+  const [{ logged }] = await tx.select({ logged: count() }).from(events).where(eq(events.groupId, groupId));
+  if (logged >= MAX_EVENTS) return true;
+  if (adding === "expense") {
+    const [{ rows }] = await tx.select({ rows: count() }).from(expenses).where(eq(expenses.groupId, groupId));
+    return rows >= MAX_EXPENSE_ROWS;
+  }
+  if (adding === "payment") {
+    const [{ rows }] = await tx.select({ rows: count() }).from(payments).where(eq(payments.groupId, groupId));
+    return rows >= MAX_PAYMENT_ROWS;
+  }
+  return false;
+}
+
 async function bumpVersion(tx: Db, groupId: string): Promise<void> {
   await tx
     .update(groups)
@@ -542,7 +566,7 @@ export async function createGroup(db: Db, input: CreateGroupBody): Promise<Store
  * transaction (201).
  * Refuses: 400 with the codes in the API contract; 404 "not_found" for any member id that is not a current member,
  * or when the link was reset after `group` was read; 409 "limit_reached" once the group holds MAX_LIVE_EXPENSES live
- * expenses.
+ * expenses, MAX_EXPENSE_ROWS expense rows (deleted ones included) or MAX_EVENTS events.
  */
 export async function addExpense(
   db: Db,
@@ -564,7 +588,8 @@ export async function addExpense(
         .select({ live: count() })
         .from(expenses)
         .where(and(eq(expenses.groupId, group.id), isNull(expenses.deletedAt)));
-      if (live >= MAX_LIVE_EXPENSES) return refuse(409, "limit_reached");
+      if (live >= MAX_LIVE_EXPENSES) return LIMIT_REACHED;
+      if (await historyFull(tx, group.id, "expense")) return LIMIT_REACHED;
 
       const checked = checkedExpense(randomUUID(), input, base, await currentPositions(tx, group.id));
       if (!checked.ok) return checked;
@@ -609,7 +634,7 @@ export async function addExpense(
  * Precondition: `expenseId` is a uuid; the route checks it, since Postgres throws on anything else.
  * Refuses: 404 "not_found" when no live expense with this id belongs to this group, for any member id that is not
  * a current member, or when the link was reset after `group` was read; 400 with the codes addExpense uses; 409
- * "stale_version" for any other version.
+ * "stale_version" for any other version; 409 "limit_reached" once the group holds MAX_EVENTS events.
  */
 export async function editExpense(
   db: Db,
@@ -641,6 +666,7 @@ export async function editExpense(
         row.version === input.version + 1 && (await editHashAt(tx, group.id, row.id, row.version)) === hash;
       return retried ? { ok: true, value: { expenseId: row.id, edited: false } } : STALE_VERSION;
     }
+    if (await historyFull(tx, group.id)) return LIMIT_REACHED;
 
     const entry = checked.value;
     const version = row.version + 1;
@@ -690,7 +716,8 @@ export async function editExpense(
  * and nothing is written.
  * Precondition: `expenseId` is a uuid; the route checks it, since Postgres throws on anything else.
  * Refuses: 404 "not_found" when no expense with this id belongs to this group, or the link was reset after `group`
- * was read; 409 "stale_version" when `version` is not the live expense's current version.
+ * was read; 409 "stale_version" when `version` is not the live expense's current version; 409 "limit_reached" once the
+ * group holds MAX_EVENTS events.
  */
 export async function deleteExpense(
   db: Db,
@@ -710,6 +737,7 @@ export async function deleteExpense(
     if (row === undefined) return NOT_FOUND;
     if (row.deletedAt !== null) return { ok: true, value: { deleted: false } };
     if (row.version !== version) return STALE_VERSION;
+    if (await historyFull(tx, group.id)) return LIMIT_REACHED;
 
     // now() is the transaction's start time, the same instant the event's created_at gets.
     await tx
@@ -735,7 +763,7 @@ export async function deleteExpense(
  * that also moves the group's version on by one (201).
  * Refuses: 400 with the codes in the API contract; 404 "not_found" when `from` or `to` is not a current member of
  * this group, or when the link was reset after `group` was read; 409 "limit_reached" once the group holds
- * MAX_LIVE_PAYMENTS live payments.
+ * MAX_LIVE_PAYMENTS live payments, MAX_PAYMENT_ROWS payment rows (undone ones included) or MAX_EVENTS events.
  */
 export async function addPayment(
   db: Db,
@@ -757,7 +785,8 @@ export async function addPayment(
         .select({ live: count() })
         .from(payments)
         .where(and(eq(payments.groupId, group.id), isNull(payments.deletedAt)));
-      if (live >= MAX_LIVE_PAYMENTS) return refuse(409, "limit_reached");
+      if (live >= MAX_LIVE_PAYMENTS) return LIMIT_REACHED;
+      if (await historyFull(tx, group.id, "payment")) return LIMIT_REACHED;
 
       const current = await tx
         .select({ id: members.id })
@@ -836,7 +865,7 @@ export async function addPayment(
  * in one transaction. A payment that is already undone succeeds again with `undone: false` and nothing is written.
  * Precondition: `paymentId` is a uuid; the route checks it, since Postgres throws on anything else.
  * Refuses: 404 "not_found" when no payment with this id belongs to this group, or the link was reset after `group`
- * was read.
+ * was read; 409 "limit_reached" once the group holds MAX_EVENTS events.
  */
 export async function undoPayment(db: Db, group: GroupRow, paymentId: string): Promise<StoreResult<{ undone: boolean }>> {
   return db.transaction(async (tx) => {
@@ -850,6 +879,7 @@ export async function undoPayment(db: Db, group: GroupRow, paymentId: string): P
       .limit(1);
     if (row === undefined) return NOT_FOUND;
     if (row.deletedAt !== null) return { ok: true, value: { undone: false } };
+    if (await historyFull(tx, group.id)) return LIMIT_REACHED;
 
     // From here on the id is the one Postgres stored, so the event never carries the caller's spelling of it.
     // now() is the transaction's start time, the same instant the event's created_at gets.
@@ -868,8 +898,9 @@ export async function undoPayment(db: Db, group: GroupRow, paymentId: string): P
  * a member_added event (the one createGroup writes per member) and moves the group's version on by one, in one
  * transaction.
  * Refuses: 404 "not_found" when the link was reset after `group` was read; 409 "too_many_members" once the group
- * holds MAX_MEMBERS live members; 400 "duplicate_member_name" when a live member already has this name key. The
- * database's partial unique index decides that, so two adds of one name at once cannot both land.
+ * holds MAX_MEMBERS live members; 409 "limit_reached" once it holds MAX_EVENTS events; 400 "duplicate_member_name"
+ * when a live member already has this name key. The database's partial unique index decides that, so two adds of one
+ * name at once cannot both land.
  */
 export async function addMember(db: Db, group: GroupRow, input: AddMemberBody): Promise<StoreResult<{ memberId: string }>> {
   const key = nameKey(input.name);
@@ -888,6 +919,7 @@ export async function addMember(db: Db, group: GroupRow, input: AddMemberBody): 
         .where(eq(members.groupId, group.id));
       const position = (last ?? -1) + 1;
       if (position > MAX_POSITION) return TOO_MANY_MEMBERS;
+      if (await historyFull(tx, group.id)) return LIMIT_REACHED;
 
       const [person] = await tx
         .insert(members)
@@ -918,7 +950,7 @@ export async function addMember(db: Db, group: GroupRow, input: AddMemberBody): 
  * Precondition: `memberId` is a uuid; the route checks it, since Postgres throws on anything else.
  * Refuses: 404 "not_found" when no member with this id belongs to this group, or the link was reset after `group` was
  * read; 409 "member_in_use" for a member who is named anywhere or has a non-zero balance; 409 "too_few_members" when
- * the group would be left with fewer than MIN_MEMBERS.
+ * the group would be left with fewer than MIN_MEMBERS; 409 "limit_reached" once the group holds MAX_EVENTS events.
  */
 export async function removeMember(db: Db, group: GroupRow, memberId: string): Promise<StoreResult<{ removed: boolean }>> {
   return db.transaction(async (tx) => {
@@ -947,6 +979,7 @@ export async function removeMember(db: Db, group: GroupRow, memberId: string): P
     const blocked = removalBlock(row.id, history, totals.value, live);
     if (blocked === "member_in_use") return MEMBER_IN_USE;
     if (blocked === "too_few_members") return TOO_FEW_MEMBERS;
+    if (await historyFull(tx, group.id)) return LIMIT_REACHED;
 
     // From here on the id is the one Postgres stored, so the event never carries the caller's spelling of it.
     // now() is the transaction's start time, the same instant the event's created_at gets.
@@ -967,7 +1000,8 @@ export async function removeMember(db: Db, group: GroupRow, memberId: string): P
  * base_currency_changed event and moves the group's version on by one, in one transaction (`changed: true`). Asking
  * for the base the group already has succeeds with `changed: false` and writes nothing.
  * Refuses: 400 "bad_currency" for a code @penny/core does not know; 404 "not_found" when the link was reset after
- * `group` was read; 409 "base_locked" once the group has had any expense or payment.
+ * `group` was read; 409 "base_locked" once the group has had any expense or payment; 409 "limit_reached" once it
+ * holds MAX_EVENTS events.
  */
 export async function changeBaseCurrency(
   db: Db,
@@ -982,6 +1016,7 @@ export async function changeBaseCurrency(
     if (locked === null) return NOT_FOUND;
     if ((await loadHistory(tx, group.id)).hasEntries) return refuse(409, "base_locked");
     if (locked.baseCurrency === next.code) return { ok: true, value: { changed: false } };
+    if (await historyFull(tx, group.id)) return LIMIT_REACHED;
 
     await tx.update(groups).set({ baseCurrency: next.code }).where(eq(groups.id, group.id));
     const payload: BaseCurrencyChangedPayload = { from: locked.baseCurrency, to: next.code };
@@ -992,19 +1027,38 @@ export async function changeBaseCurrency(
 }
 
 /**
- * Gives `group` a new link token: its hash replaces the old one, a link_reset event that names no token or hash is
- * written, and the group's version moves on by one, in one transaction. Returns the new token, which must go to the
- * caller and nowhere else.
- * Refuses: 404 "not_found" when the link was already reset after `group` was read, so two resets at once leave one
- * working link, held by whoever made it.
+ * Moves `group` to the link token the browser made: that token's hash replaces the old one, a link_reset event that
+ * names no token or hash is written, and the group's version moves on by one, in one transaction (`rotated: true`).
+ * The token itself is never stored. When the stored hash is already `newToken`'s, because this same reset landed
+ * after `group` was read, it succeeds again with `rotated: false` and writes nothing.
+ * Precondition: `newToken` passed parseGroupToken; the route's schema checks it.
+ * Not held to the history caps: a full group must still be able to cut off a leaked link (C26, C3). The per-group write
+ * rate limit in the route still bounds how fast resets can add to the log.
+ * Refuses: 400 "invalid_body" when `newToken` is the token `group` was read with, or another group's link; 404
+ * "not_found" when a different reset replaced the link after `group` was read, so two resets at once leave one working
+ * link, held by whoever made it.
  */
-export async function resetLink(db: Db, group: GroupRow): Promise<StoreResult<{ token: string }>> {
-  return db.transaction(async (tx) => {
-    if ((await lockGroup(tx, group)) === null) return NOT_FOUND;
-    const token = await rotateGroupToken(tx, group.id);
-    const payload: LinkResetPayload = {};
-    await tx.insert(events).values({ groupId: group.id, kind: "link_reset", entityId: group.id, payload });
-    await bumpVersion(tx, group.id);
-    return { ok: true, value: { token } };
-  });
+export async function resetLink(db: Db, group: GroupRow, newToken: string): Promise<StoreResult<{ rotated: boolean }>> {
+  const nextHash = hashGroupToken(newToken);
+  try {
+    return await db.transaction(async (tx) => {
+      // lockGroup alone would turn this reset's own earlier landing into a 404, so the row is locked and compared here.
+      const [row] = await tx.select().from(groups).where(eq(groups.id, group.id)).for("update");
+      if (row === undefined) return NOT_FOUND;
+      if (row.tokenHash === nextHash) {
+        return row.tokenHash === group.tokenHash ? refuse(400, "invalid_body") : { ok: true, value: { rotated: false } };
+      }
+      if (row.tokenHash !== group.tokenHash) return NOT_FOUND;
+
+      await tx.update(groups).set({ tokenHash: nextHash }).where(eq(groups.id, group.id));
+      const payload: LinkResetPayload = {};
+      await tx.insert(events).values({ groupId: group.id, kind: "link_reset", entityId: group.id, payload });
+      await bumpVersion(tx, group.id);
+      return { ok: true, value: { rotated: true } };
+    });
+  } catch (error) {
+    // Only someone already holding the other group's link could send it, so the refusal tells them nothing new.
+    if (isUniqueViolation(error, "groups_token_hash_unique")) return refuse(400, "invalid_body");
+    throw error;
+  }
 }

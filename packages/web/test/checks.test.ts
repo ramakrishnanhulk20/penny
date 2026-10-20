@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/checks/route";
 import { type Db, setDbForTests } from "@/db/client";
+import { checksSnapshot } from "@/db/schema";
 import { createTestDb } from "@/db/testing";
 import { type ChecksSnapshot, fetchSnapshot, parseVerdict, readSnapshot, safeReportUrl } from "@/lib/checks";
 
@@ -89,6 +90,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setDbForTests(null);
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -324,6 +326,22 @@ describe("readSnapshot", () => {
     await expect(readSnapshot(db, T0, gitHubDown)).rejects.toThrow();
   });
 
+  it("waits out the window after a failed very first read too, and serves nothing until a good one", async () => {
+    const db = await createTestDb();
+    const failing = vi.fn(gitHubDown);
+
+    await expect(readSnapshot(db, T0, failing)).rejects.toThrow();
+    await expect(readSnapshot(db, at(14 * 60 + 59), failing)).rejects.toThrow();
+    expect(failing).toHaveBeenCalledTimes(1);
+
+    await expect(readSnapshot(db, at(15 * 60), failing)).rejects.toThrow();
+    expect(failing).toHaveBeenCalledTimes(2);
+    expect(await readSnapshot(db, at(30 * 60), async () => sample())).toEqual({
+      ...sample(),
+      fetchedAt: at(30 * 60).toISOString(),
+    });
+  });
+
   it("refreshes once when two reads arrive together (on PGlite)", async () => {
     const db = await createTestDb();
     let release: () => void = () => {};
@@ -355,6 +373,22 @@ describe("readSnapshot", () => {
     await expect(readSnapshot(lockHeldElsewhere(await createTestDb()), T0, refresh)).rejects.toThrow();
   });
 
+  it("stores and serves a title that held a lone surrogate as well-formed text", async () => {
+    const db = await createTestDb();
+    const bodies = threePulls();
+    const [newest, ...rest] = bodies.get(LIST_URL) as ReturnType<typeof pull>[];
+    bodies.set(LIST_URL, [{ ...newest, title: "Fix \ud800 login" }, ...rest]);
+    const refresh = () => fetchSnapshot(fakeGitHub(bodies).fetchImpl, null);
+
+    const served = await readSnapshot(db, T0, refresh);
+    const [row] = await db.select().from(checksSnapshot);
+    const again = await readSnapshot(db, at(60), refresh);
+
+    expect(served.prs[0].title).toBe("Fix � login");
+    expect((row.payload as ChecksSnapshot).prs[0].title).toBe("Fix � login");
+    expect(again.prs[0].title).toBe("Fix � login");
+  });
+
   it("names this deployment's commit, with no pull request, when the stored read was made for another one", async () => {
     const db = await createTestDb();
     vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha("d"));
@@ -367,17 +401,26 @@ describe("readSnapshot", () => {
 });
 
 describe("GET /api/checks", () => {
-  it("answers 503 with no detail before any good read, then 200 with the snapshot once GitHub answers", async () => {
+  it("answers 503 with no detail before any good read, asks GitHub once in that window, then 200 once it answers", async () => {
     setDbForTests(await createTestDb());
-    vi.stubGlobal("fetch", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-19T17:42:00.000Z"));
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      calls.push(String(input));
       throw new Error("connect ETIMEDOUT api.github.com with github_pat_secret");
     });
 
-    const down = await GET(new Request("http://localhost/api/checks"));
-    expect(down.status).toBe(503);
-    expect(await down.text()).toBe('{"error":{"code":"unavailable"}}');
-    expect(down.headers.get("Cache-Control")).toBe("no-store");
+    for (let i = 0; i < 2; i += 1) {
+      const down = await GET(new Request("http://localhost/api/checks"));
+      expect(down.status).toBe(503);
+      expect(await down.text()).toBe('{"error":{"code":"unavailable"}}');
+      expect(down.headers.get("Cache-Control")).toBe("no-store");
+    }
+    // The failed refresh stops at the pull request list, so that one call is its whole set.
+    expect(calls).toEqual([LIST_URL]);
 
+    vi.setSystemTime(new Date("2026-10-19T17:57:00.000Z"));
     vi.stubGlobal("fetch", fakeGitHub(threePulls()).fetchImpl);
     const up = await GET(new Request("http://localhost/api/checks"));
     expect(up.status).toBe(200);

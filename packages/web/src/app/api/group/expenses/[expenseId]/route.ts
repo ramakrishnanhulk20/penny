@@ -40,7 +40,8 @@ function refused(refusal: Refusal): Response {
  * the expense to version + 1 (a retry).
  * 400 with the codes adding an expense uses, or invalid_body for a body that is not exactly the edit shape.
  * 404 not_found, byte for byte the same, for an unknown token, an id that is not a uuid, an expense of another group,
- * a deleted expense, or any member id outside this group. 409 stale_version when the version is not the current one.
+ * a deleted expense, or any member id outside this group. 409 stale_version when the version is not the current one,
+ * or limit_reached once the group holds MAX_EVENTS events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
  * Any other failure is a bare 500.
@@ -84,7 +85,8 @@ export async function PATCH(request: Request, { params }: Params): Promise<Respo
  * 200 { group } once deleted, and the same 200 with nothing written when it already was.
  * 400 invalid_body when ?version= is missing, repeated, or not a positive whole number written in plain digits.
  * 404 not_found, byte for byte the same, for an unknown token, an id that is not a uuid, or an expense of another
- * group. 409 stale_version when the version is not the live expense's current one.
+ * group. 409 stale_version when the version is not the live expense's current one, or limit_reached once the group
+ * holds MAX_EVENTS events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
  * Any other failure is a bare 500.

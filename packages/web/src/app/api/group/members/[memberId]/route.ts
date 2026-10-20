@@ -19,7 +19,8 @@ const MEMBER_ID = z.uuid();
  * 200 { group } once removed, and the same 200 with nothing written when they already were.
  * 404 not_found, byte for byte the same, for an unknown token, an id that is not a uuid, or a member of another
  * group. 409 member_in_use for a member named in any expense or payment, deleted ones included, or with a non-zero
- * balance; 409 too_few_members when only two members are left.
+ * balance; 409 too_few_members when only two members are left; 409 limit_reached once the group holds MAX_EVENTS
+ * events.
  * 429 rate_limited past LIMITS.groupWritePerNetwork from one client network, or past LIMITS.groupWritePerGroup for
  * the group the token names; an unknown token is a 404 first.
  * Any other failure is a bare 500.
