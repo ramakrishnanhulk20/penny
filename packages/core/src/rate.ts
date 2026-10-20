@@ -49,5 +49,5 @@ export function convert(amountMinor: bigint, from: Currency, to: Currency, rate:
   const shift = to.digits - from.digits - rate.scale;
   const numerator = amountMinor * rate.units * 10n ** BigInt(Math.max(shift, 0));
   const denominator = 10n ** BigInt(Math.max(-shift, 0));
-  return (2n * numerator + denominator) / (2n * denominator);
+  return numerator / denominator;
 }
