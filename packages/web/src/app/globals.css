@@ -2,6 +2,19 @@
   color-scheme: light dark;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   line-height: 1.5;
+  /* These tokens belong to the cinema pages. */
+  --ink: #0B0A09;
+  --ink-2: #14110E;
+  --paper: #F2EEE8;
+  --paper-dim: rgba(242, 238, 232, 0.78);
+  --muted: #8A847C;
+  --rule: rgba(242, 238, 232, 0.16);
+  --copper: #C8763E;
+  --copper-hi: #E39A62;
+  --copper-lo: #7A4220;
+  --copper-deep: #3A1E0E;
+  --error: #E2606B;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 *,
@@ -11,11 +24,27 @@
 }
 
 body {
+  margin: 0;
+  /* A long name or description with no spaces wraps instead of widening the page. */
+  overflow-wrap: anywhere;
+}
+
+/* The narrow reading column sits on the page's own main, so the cinema pages can run edge to edge. */
+body > main:not(.cinema) {
   margin: 0 auto;
   max-width: 40rem;
   padding: 1.5rem 16px;
-  /* A long name or description with no spaces wraps instead of widening the page. */
-  overflow-wrap: anywhere;
+}
+
+main.cinema {
+  display: block;
+  max-width: none;
+  padding: 0;
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  min-height: 100svh;
 }
 
 main,
