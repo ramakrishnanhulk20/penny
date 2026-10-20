@@ -12,11 +12,11 @@ On a group page, the form headed "Add an expense" records one cost: what it was,
 | "What was it for?" | Required, 1 to 80 characters, for example "Dinner at Taberna". |
 | "Amount" | Required, for example 12.50. Up to the currency's number of decimals: USD 2, JPY 0, KWD 3. |
 | "Currency" | Starts on the group's base currency. |
-| `Rate to <BASE>` | Shown only when the currency differs from the base currency, with the base's code in place of `<BASE>`, such as "Rate to EUR". Prefilled with the ECB reference rate and labelled with its date, such as "ECB reference rate, 2026-10-19". You can change it. |
+| `Rate to <BASE>` | Shown only when the currency differs from the base currency, with the base's code in place of `<BASE>`, such as "Rate to EUR". Prefilled with the ECB reference rate, labelled with its date, such as "ECB reference rate, 2026-10-19", when the ECB publishes a rate for that pair; otherwise you type it. You can change it. |
 | "Paid by" | One member. It starts on the person you chose under "You are:". |
 | "Split" | Three choices, below. |
 
-If no rate can be fetched, the form says "No reference rate available. Enter the rate you used." and the field waits for you. See [Currencies and rates](../concepts/currencies-and-rates.mdx).
+If no rate can be fetched, including for a pair the ECB does not publish, the form says "No reference rate available. Enter the rate you used." and the field waits for you. See [Currencies and rates](../concepts/currencies-and-rates.mdx).
 
 ## The three ways to split
 

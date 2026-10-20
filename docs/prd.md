@@ -53,7 +53,7 @@ Top: the group name, "Balances in <BASE>" (for example "Balances in EUR"), and t
 - "What was it for?": required, 1 to 80 characters.
 - "Amount": required, for example 12.50. Up to the currency's number of decimals (USD 2, JPY 0, KWD 3).
 - "Currency": defaults to the base currency.
-- "Rate to <BASE>": shown only when the currency differs from the base. Pre-filled with the European Central Bank reference rate for the latest day available, labelled "ECB reference rate, <date>"; the user can change it. If no rate can be fetched: "No reference rate available. Enter the rate you used."
+- "Rate to <BASE>": shown only when the currency differs from the base. When the European Central Bank publishes a rate for that pair, pre-filled with its reference rate for the latest day available, labelled "ECB reference rate, <date>"; the user can change it. Otherwise the user types it. If no rate can be fetched, including for a pair the ECB does not publish: "No reference rate available. Enter the rate you used."
 - "Paid by": one member.
 - "Split": three choices.
   - "Equally": a checkbox per member, all ticked by default; the amount is divided equally among ticked members, with any leftover cents going to the members listed first.
@@ -75,7 +75,7 @@ Top: the group name, "Balances in <BASE>" (for example "Balances in EUR"), and t
   - "Enter the rate to <BASE>."
 - After saving, the expense appears at the top of the list, and the balances and the settle-up plan update.
 
-Any unexpected failure shows "Something went wrong. Try again." While the group loads the page shows "Loading the group...". "Copy link" confirms with "Link copied". The "You are:" selector starts on "Choose your name". In "Exact amounts" mode the live line reads "All assigned" once the amounts add up.
+Any unexpected failure shows "Something went wrong. Try again." While the group loads the page shows "Loading the group...". "Copy link" confirms with "Link copied". If the browser refuses the clipboard, it says "Copy did not work here. Copy the address from the address bar." for 4 seconds instead. The "You are:" selector starts on "Choose your name". In "Exact amounts" mode the live line reads "All assigned" once the amounts add up.
 
 **Expenses** list, newest first (empty: "No expenses yet."): description, "<amount> <CUR>", "paid by <Name>", and for a foreign currency also "= <base amount> <BASE> at <rate>". Each has "Edit" and "Delete".
 - "Edit" fills the same form with that expense, under the heading "Edit expense", with the buttons "Save changes" and "Cancel". "Save changes" updates it. Once the change is saved, or after "Cancel", the form is back to "Add an expense", empty. If someone else changed it first: "This expense was changed by someone else. Reload to see the latest."

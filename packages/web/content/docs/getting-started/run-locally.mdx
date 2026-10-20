@@ -5,7 +5,7 @@ description: "Clone the repository, run the tests with no database, then start t
 
 ## What you need
 
-Node 22.13 or later, and npm. CI runs Node 24. Running the tests needs nothing else. Running the app needs a Neon Postgres database.
+Node 22.13 or later, and npm. CI runs Node 24, and the tests are known to pass on Node 24 and 26. Running the tests needs nothing else. Running the app needs a Neon Postgres database.
 
 ## Clone and test
 
@@ -20,7 +20,12 @@ The tests need no database: the web tests start an in-process Postgres (PGlite, 
 
 ## Start the app
 
-Penny talks to Postgres through Neon's serverless driver, so a Neon connection string is what `DATABASE_URL` expects.
+The app needs a Neon Postgres database. A local Postgres does not work, because the app connects through Neon's serverless driver. Getting a database takes four steps:
+
+1. Make a free account at https://neon.tech.
+2. Create a project.
+3. Copy the project's connection string, the pooled one.
+4. Set `DATABASE_URL` to it, then migrate and start the app:
 
 ```bash
 export DATABASE_URL="postgresql://..."

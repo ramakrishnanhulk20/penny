@@ -1,13 +1,13 @@
 ---
 title: "The TestSprite suite"
-description: "The 21 browser tests that run on every pull request, how they are written, and how the required check holds the merge."
+description: "The 24 browser tests that run on every pull request, how they are written, and how the required check holds the merge."
 ---
 
-TestSprite is a testing service that drives a real browser. For every pull request to Penny it opens that pull request's own preview and runs 21 tests against it. GitHub will not merge the pull request until TestSprite's check is green.
+TestSprite is a testing service that drives a real browser. For every pull request to Penny it opens that pull request's own preview and runs 24 tests against it. GitHub will not merge the pull request until TestSprite's check is green.
 
-## The 21 tests
+## The 24 tests
 
-The names are TestSprite's own, as listed in its [comment on pull request #10](https://github.com/ramakrishnanhulk20/penny/pull/10#issuecomment-6284111373).
+The names are TestSprite's own. The first 21 are listed in its [comment on pull request #10](https://github.com/ramakrishnanhulk20/penny/pull/10#issuecomment-6284111373); the last three were added after the [planted-bug study](#planted-bug-study).
 
 | Area | Test |
 | --- | --- |
@@ -32,8 +32,11 @@ The names are TestSprite's own, as listed in its [comment on pull request #10](h
 | Balances and settling | Open a sample trip with exact balances and a three-payment plan. |
 | Balances and settling | Mark payments as paid until everyone is settled. |
 | Balances and settling | Undo a payment and the debt comes back. |
+| Added after the study | Convert at a rate that lands on half a cent. |
+| Added after the study | Settle up in the fewest payments when the simple plan needs more. |
+| Added after the study | Reset link: the old link opens nothing and the new one opens the group. |
 
-That is 7 tests on groups and members, 5 on splitting, 2 on currency, 2 on correcting expenses and 5 on balances and settling.
+That is 7 tests on groups and members, 5 on splitting, 2 on currency, 2 on correcting expenses, 5 on balances and settling, and 3 added after the study.
 
 ## How the tests are written
 
@@ -46,7 +49,7 @@ That is 7 tests on groups and members, 5 on splitting, 2 on currency, 2 on corre
 
 1. A commit is pushed to a pull request branch.
 2. Vercel builds a preview. The preview uses its own Neon database branch, copied from the preview database, which holds synthetic data only.
-3. TestSprite tests that preview and posts a commit status named `TestSprite V3` on the commit. It is pending while the tests run, then success or failure. The status text reads "All 21 tests passed" or, for a failure, "18/21 passed, 3 failed".
+3. TestSprite tests that preview and posts a commit status named `TestSprite V3` on the commit. It is pending while the tests run, then success or failure. The status text reads "All 24 tests passed" or, for a failure, something like "23/24 passed, 1 failed".
 4. When the pull request closes, the `neon-cleanup` workflow deletes its database branch.
 
 The whole sequence is drawn on [the self-fixing loop page](./self-fixing-loop.mdx).
@@ -57,7 +60,7 @@ The branch rule on `main` requires a pull request, applies to administrators, an
 
 | Required check | Posted by | Pinned to | Meaning |
 | --- | --- | --- | --- |
-| `TestSprite V3` | TestSprite's GitHub App | App id 2756476 | The 21 browser tests passed on this pull request's preview |
+| `TestSprite V3` | TestSprite's GitHub App | App id 2756476 | The browser tests (24 today) passed on this pull request's preview |
 | `maintainer-review` | The `maintainer-review` workflow | GitHub Actions (app id 15368) | Green at once if no robot commit exists; otherwise pending until the `reviewed` label is added after the last one |
 
 Each check is pinned to its source. A job that borrows either name cannot satisfy the rule. The `ci` workflow (typecheck, lint, unit tests) also runs on every pull request, but it is not a required check.
@@ -66,8 +69,8 @@ Each check is pinned to its source. A job that borrows either name cannot satisf
 
 The [checks page](/checks), headed "How Penny is tested", shows the same facts from inside the product, read live from GitHub.
 
-- "Live right now" says which commit this site runs, for example "This site runs commit f18a91e from pull request #14.", which it said on 20 October 2026 after that pull request merged.
-- "Recent pull requests" lists the 12 newest pull requests opened by the maintainer. Each shows its number and title, its state, the TestSprite line, and links to "Pull request" and "Test report". The TestSprite line reads like "TestSprite: passed, 21 of 21" or "TestSprite: failed, 18 of 21 passed, 3 failed".
+- "Live right now" says which commit this site runs, for example "This site runs commit f18a91e from pull request #14.", which it said on 20 October 2026 after that pull request merged. Under it is that pull request's own TestSprite line, read from its head commit by the same rules as the list, however old the pull request is.
+- "Recent pull requests" lists the 12 newest pull requests opened by the maintainer. Each shows its number and title, its state, the TestSprite line, and links to "Pull request" and "Test report (TestSprite sign-in)". The report opens on TestSprite's site, which asks you to sign in. The TestSprite line reads like "TestSprite: passed, 24 of 24" or "TestSprite: failed, 23 of 24 passed, 1 failed".
 - A line at the bottom, such as "Read from GitHub at 05:31 UTC.", says when the data was fetched. If GitHub did not answer, the page keeps the last good read and says so.
 
 The verdict is one of passed, failed, blocked, running, not run or unknown. The page is strict about "passed":
@@ -77,6 +80,39 @@ The verdict is one of passed, failed, blocked, running, not run or unknown. The 
 - A `success` with no passed test and some blocked tests shows as blocked, because nothing was shown to work. Blocked tests are always counted in the line.
 - The report link appears only if it is an https address on TestSprite's own report host.
 
+## Planted-bug study
+
+Eight pull requests titled "Study" each plant one deliberate bug. TestSprite tests each one, and each is closed unmerged.
+
+| Bug | Pull request | The planted bug | First run, 21 tests |
+| --- | --- | --- | --- |
+| b1 | [#16](https://github.com/ramakrishnanhulk20/penny/pull/16) | Conversion rounds down | Missed |
+| b2 | [#17](https://github.com/ramakrishnanhulk20/penny/pull/17) | Settle-up uses the greedy plan | Missed |
+| b3 | [#18](https://github.com/ramakrishnanhulk20/penny/pull/18) | Payments counted the wrong way round | Caught |
+| b4 | [#19](https://github.com/ramakrishnanhulk20/penny/pull/19) | Names compared with letter case | Caught |
+| b5 | [#20](https://github.com/ramakrishnanhulk20/penny/pull/20) | Base currency lock needs a payment too | Caught |
+| b6 | [#21](https://github.com/ramakrishnanhulk20/penny/pull/21) | Reset link changes nothing | Missed |
+| b7 | [#22](https://github.com/ramakrishnanhulk20/penny/pull/22) | JPY gets 2 decimals | Caught |
+| b8 | [#23](https://github.com/ramakrishnanhulk20/penny/pull/23) | Delete skips the confirmation | Caught |
+
+TestSprite caught 5 of 8. The unit tests caught b1 to b7; only the browser suite caught b8.
+
+Three tests were then added to the suite, one aimed at each miss, making 24:
+
+- "Convert at a rate that lands on half a cent": 10.05 USD at 0.5 must show "= 5.03 EUR at 0.5".
+- "Settle up in the fewest payments when the simple plan needs more": a five-person trip that settles in exactly 3 payments, where the greedy plan needs 4.
+- "Reset link: the old link opens nothing and the new one opens the group".
+
+The three missed bugs were tested again with all 24 tests ([#16](https://github.com/ramakrishnanhulk20/penny/pull/16), [#17](https://github.com/ramakrishnanhulk20/penny/pull/17) and [#21](https://github.com/ramakrishnanhulk20/penny/pull/21), reopened with a fresh preview, so their latest check now reads "23/24 passed, 1 failed"). Each time the one failure was the new test aimed at that bug. Each new test passed on the other two planted bugs and on production, so none of them fails on correct code.
+
+| Bug | First run, 21 tests | After the three new tests, 24 tests |
+| --- | --- | --- |
+| b1 conversion rounds down | Missed | Caught by "Convert at a rate that lands on half a cent" |
+| b2 settle-up uses the greedy plan | Missed | Caught by "Settle up in the fewest payments when the simple plan needs more" |
+| b6 reset link changes nothing | Missed | Caught by "Reset link: the old link opens nothing and the new one opens the group" |
+
+The suite now catches all 8 planted bugs.
+
 ## What the suite does not cover
 
-A green check means TestSprite's tests passed, nothing more. The 21 tests cover groups, splitting, currency, corrections and settling in a browser, against a preview with synthetic data. They say nothing about how the home page looks or animates. Message wording for every server error code, limits, rate limiting and the database rules are covered by the unit and database tests on [Unit and property tests](./unit-and-property-tests.mdx), not by these.
+A green check means TestSprite's tests passed, nothing more. The 24 tests cover groups, splitting, currency, corrections and settling in a browser, against a preview with synthetic data. They say nothing about how the home page looks or animates. Message wording for every server error code, limits, rate limiting and the database rules are covered by the unit and database tests on [Unit and property tests](./unit-and-property-tests.mdx), not by these.

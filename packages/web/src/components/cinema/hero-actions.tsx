@@ -4,7 +4,7 @@ import { motion } from "motion/react";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { FieldError } from "@/components/field-error";
-import { FALLBACK_MESSAGE } from "@/lib/client/messages";
+import { messageFor } from "@/lib/client/messages";
 import { startSampleTrip } from "@/lib/client/sample-trip";
 import { ArrowIcon } from "./arrow-icon";
 import styles from "./cinema.module.css";
@@ -37,15 +37,15 @@ export function HeroActions() {
     }
     inFlight.current = false;
     setPending(false);
-    setError(FALLBACK_MESSAGE);
+    setError(messageFor(result.error));
   }
 
   return (
     <div className={styles.actions}>
       <motion.div
         className={styles.actionRow}
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
+        initial={{ y: 16 }}
+        animate={{ y: 0 }}
         transition={{ duration: 0.7, ease: EASE_OUT, delay: 1.1 }}
       >
         <Link href="/new" className={styles.primary} data-testid="home-start">

@@ -135,7 +135,7 @@ The routes are in [packages/web/src/app/api](packages/web/src/app/api). The tabl
 
 ## Invariants
 
-The rules that bind the pieces together are numbered C1 to C41 in the [threat model](docs/security/threat-model.md). They fall into these groups:
+The rules that bind the pieces together are numbered C1 to C42 in the [threat model](docs/security/threat-model.md). They fall into these groups:
 
 | Group | Numbers | What they cover |
 | --- | --- | --- |

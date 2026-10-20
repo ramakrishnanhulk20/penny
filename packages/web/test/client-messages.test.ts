@@ -1,10 +1,11 @@
 // Not covered: which field each message sits under, its aria-describedby link and the focus move; that the create form,
-// the expense form and the member form call the checks tested here; and the reload a stale answer starts. Those need a
-// browser. The scan for server codes reads the source as text, so a code built at run time from anything but core's
+// the expense form, the member form, the sample trip button and the group page call the checks tested here; and the
+// reload a stale answer starts. Those need a browser. The scan for server codes reads the source as text, so a code built at run time from anything but core's
 // RateError would slip past it.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { checksFailureLine } from "@/app/(site)/checks/checks-screen";
 import {
   DESCRIPTION_MAX as SERVER_DESCRIPTION_MAX,
   GROUP_NAME_MAX as SERVER_GROUP_NAME_MAX,
@@ -128,6 +129,19 @@ describe("messageFor", () => {
     expect(messageFor("amount_too_many_decimals", { currency: "USD" })).toBe(FALLBACK_MESSAGE);
     expect(messageFor("split_exact_sum_mismatch", { currency: "USD" })).toBe(FALLBACK_MESSAGE);
     expect(messageFor("rate_required")).toBe(FALLBACK_MESSAGE);
+  });
+});
+
+describe("a page that could not load", () => {
+  const WAIT = "Too many requests from your network. Wait a minute and try again.";
+
+  it("tells a rate-limited visitor to wait a minute, and keeps each page's own words for anything else", () => {
+    // The sample trip button and the group page pass the server's code, or network and internal, to messageFor.
+    expect(messageFor("rate_limited")).toBe(WAIT);
+    for (const code of ["network", "internal", "unavailable"]) expect(messageFor(code)).toBe(FALLBACK_MESSAGE);
+    expect(checksFailureLine(429)).toBe(WAIT);
+    expect(checksFailureLine(503)).toBe("Checks are not available right now.");
+    expect(checksFailureLine(null)).toBe("Checks are not available right now.");
   });
 });
 

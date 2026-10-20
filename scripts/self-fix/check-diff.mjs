@@ -14,7 +14,8 @@ export const RULES = {
   "path-denied":
     "The patch touches a file the self-fix may never change: a test, a config, a package or lock file, an agent instruction file, a security module, anything in a node_modules folder, or a file or folder whose name starts with a dot, such as .env, .git or .claude.",
   "file-type": "Only .ts, .tsx and .css files may change.",
-  "new-endpoint": "The patch adds a route handler, middleware or proxy file, which would open a new way into the server.",
+  "new-endpoint":
+    "The patch adds a new file under the app's routes, or a route handler, middleware, proxy or instrumentation file anywhere, which could open a new way into the server.",
   "shadows-denied":
     "The patch adds a file that could be loaded in place of a security module: the same name with another extension, or a folder with that name.",
   deletion: "The patch deletes a file.",
@@ -66,6 +67,11 @@ const DENIED_SEGMENTS = new Set(["__tests__", "node_modules"]);
 const ALLOWED_EXTENSIONS = [".ts", ".tsx", ".css"];
 // Next.js turns a file with one of these names into server code that answers requests.
 const ENDPOINT_NAMES = new Set(["route", "middleware", "proxy", "instrumentation", "instrumentation-client"]);
+// Next.js serves far more than route.ts from the app folder (pages, layouts, sitemaps, metadata
+// images, each of which runs server code), and a list of those names would miss the next one.
+// So no new file may appear there at all; edits to files already there stay allowed. The older
+// pages folder is served the same way (pages/api/x.ts is an endpoint), so it counts too.
+const APP_ROUTES_ROOTS = ["packages/web/src/app/", "packages/web/src/pages/"];
 const SAFE_PATH = /^[A-Za-z0-9._@()[\]-]+(?:\/[A-Za-z0-9._@()[\]-]+)*$/;
 
 class Refusal extends Error {
@@ -183,6 +189,12 @@ export function isEndpointFile(path) {
   return ENDPOINT_NAMES.has(path.split("/").at(-1).toLowerCase().split(".")[0]);
 }
 
+/** True for any path under a folder Next.js serves as routes, compared in lower case like the other path rules. */
+export function isInAppRoutes(path) {
+  const lower = path.toLowerCase();
+  return APP_ROUTES_ROOTS.some((root) => lower.startsWith(root));
+}
+
 function withoutExtensions(path) {
   const slash = path.lastIndexOf("/");
   return path.slice(0, slash + 1) + path.slice(slash + 1).split(".")[0];
@@ -292,7 +304,7 @@ export function checkPatch(text) {
     if (!isAllowedPath(file.path)) return { ok: false, rule: "path-not-allowed" };
     if (isDeniedPath(file.path)) return { ok: false, rule: "path-denied" };
     if (file.isNew && shadowsProtectedModule(file.path)) return { ok: false, rule: "shadows-denied" };
-    if (file.isNew && isEndpointFile(file.path)) return { ok: false, rule: "new-endpoint" };
+    if (file.isNew && (isInAppRoutes(file.path) || isEndpointFile(file.path))) return { ok: false, rule: "new-endpoint" };
     if (!hasAllowedFileType(file.path)) return { ok: false, rule: "file-type" };
     // A path is pushed and posted in the comment just like an added line.
     if (looksLikeSecret(file.path)) return { ok: false, rule: "secret-pattern" };

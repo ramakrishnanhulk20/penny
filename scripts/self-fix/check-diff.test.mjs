@@ -138,7 +138,7 @@ test("new files whose names only resemble a security module, or sit elsewhere, p
     "packages/web/src/lib/groups-list.ts",
     "packages/web/src/lib/my-groups.tsx",
     "packages/web/src/components/groups/list.tsx",
-    "packages/web/src/app/g/[token]/env-note.tsx",
+    "packages/web/src/components/env-note.tsx",
     "packages/core/src/groups.ts",
   ]) {
     assert.equal(checkPatch(create(path, ["export const x = 1;"])).ok, true, path);
@@ -184,7 +184,7 @@ test("only .ts, .tsx and .css files may change", () => {
     "packages/web/src/lib/fx.jsx",
     "packages/web/src/lib/tsconfig.json",
     "packages/web/src/lib/data.json",
-    "packages/web/src/app/icon.svg",
+    "packages/web/src/components/icon.svg",
     "packages/web/src/lib/readme.md",
     "packages/web/src/lib/fx.TS",
     "packages/web/src/lib/fx",
@@ -379,9 +379,24 @@ test("a new route handler, middleware or proxy file is refused anywhere", () => 
   }
 });
 
-test("an edit to an existing route handler, and a new page, pass", () => {
+test("any new file under the app's routes is refused, whatever Next.js would make of it", () => {
+  for (const path of [
+    "packages/web/src/app/about/page.tsx",
+    "packages/web/src/app/(site)/layout.tsx",
+    "packages/web/src/app/sitemap.ts",
+    "packages/web/src/app/opengraph-image.tsx",
+    "packages/web/src/app/(site)/g/notes.tsx",
+    "packages/web/src/App/page.tsx",
+    "packages/web/src/pages/api/leak.ts",
+    "packages/web/src/pages/index.tsx",
+  ]) {
+    assert.equal(ruleFor(create(path, ["export default function Page() { return null; }"])), "new-endpoint", path);
+  }
+});
+
+test("an edit to an existing route handler or page, and a new file under src/lib, pass", () => {
   assert.equal(checkPatch(modify("packages/web/src/app/api/groups/route.ts")).ok, true);
-  assert.equal(checkPatch(create("packages/web/src/app/about/page.tsx", ["export default function About() { return null; }"])).ok, true);
+  assert.equal(checkPatch(modify("packages/web/src/app/(site)/page.tsx")).ok, true);
   assert.equal(checkPatch(create("packages/web/src/lib/router-state.ts", ["export {};"])).ok, true);
 });
 

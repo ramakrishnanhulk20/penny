@@ -28,6 +28,10 @@ function statusesUrl(head: string): string {
   return `https://api.github.com/repos/ramakrishnanhulk20/penny/commits/${head}/statuses?per_page=100`;
 }
 
+function commitPullsUrl(commit: string): string {
+  return `https://api.github.com/repos/ramakrishnanhulk20/penny/commits/${commit}/pulls?per_page=10`;
+}
+
 function pull(
   number: number,
   state: "open" | "closed",
@@ -81,13 +85,14 @@ function fakeGitHub(bodies: ReadonlyMap<string, unknown>) {
   return { fetchImpl: fetchImpl as typeof fetch, calls };
 }
 
-// One merged, one open and one closed pull request, newest first, as GitHub lists them.
+// One merged, one open and one closed pull request, newest first, as GitHub lists them. Commit d is #2's merge commit.
 function threePulls(): Map<string, unknown> {
   return new Map<string, unknown>([
     [LIST_URL, [pull(3, "open", null, sha("a")), pull(2, "closed", sha("d"), sha("b")), pull(1, "closed", null, sha("c"))]],
     [statusesUrl(sha("a")), [status({ state: "pending", description: "12 tests queued" })]],
     [statusesUrl(sha("b")), [status()]],
     [statusesUrl(sha("c")), [status({ context: "Vercel", description: "Deployment has completed" })]],
+    [commitPullsUrl(sha("d")), [pull(2, "closed", sha("d"), sha("b"))]],
   ]);
 }
 
@@ -209,7 +214,11 @@ describe("fetchSnapshot", () => {
 
     const snapshot = await fetchSnapshot(fakeGitHub(bodies).fetchImpl, null);
 
-    expect(snapshot.live).toEqual({ sha: sha("d"), pr: 2 });
+    expect(snapshot.live).toEqual({
+      sha: sha("d"),
+      pr: 2,
+      verdict: { verdict: "passed", passed: 12, failed: 0, blocked: 0, total: 12 },
+    });
     expect(snapshot.stale).toBe(false);
     expect(snapshot.prs.map((pr) => [pr.number, pr.state, pr.prUrl])).toEqual([
       [3, "open", "https://github.com/ramakrishnanhulk20/penny/pull/3"],
@@ -249,6 +258,7 @@ describe("fetchSnapshot", () => {
       [LIST_URL, [...spam.reverse(), pull(10, "closed", sha("d"), sha("b")), pull(9, "open", null, sha("a"))]],
       [statusesUrl(sha("b")), [status()]],
       [statusesUrl(sha("a")), []],
+      [commitPullsUrl(sha("d")), [pull(10, "closed", sha("d"), sha("b"))]],
     ]);
     const github = fakeGitHub(bodies);
 
@@ -258,8 +268,66 @@ describe("fetchSnapshot", () => {
       [10, "Change 10", "passed"],
       [9, "Change 9", "not run"],
     ]);
-    expect(snapshot.live).toEqual({ sha: sha("d"), pr: 10 });
-    expect(github.calls.map((call) => call.url)).toEqual([LIST_URL, statusesUrl(sha("b")), statusesUrl(sha("a"))]);
+    expect(snapshot.live).toMatchObject({ sha: sha("d"), pr: 10, verdict: { verdict: "passed" } });
+    // The live pull request is one of the listed ones, so its status read is reused rather than made twice.
+    expect(github.calls.map((call) => call.url)).toEqual([
+      LIST_URL,
+      statusesUrl(sha("b")),
+      statusesUrl(sha("a")),
+      commitPullsUrl(sha("d")),
+    ]);
+  });
+
+  it("finds the live pull request and its verdict when it is older than the 12 listed, in at most 15 calls", async () => {
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha("d"));
+    const head = (number: number) => (0xb00 + number).toString(16).padStart(40, "0");
+    const pulls = Array.from({ length: 14 }, (_, index) => {
+      const number = 14 - index;
+      return pull(number, "closed", number === 2 ? sha("d") : null, head(number));
+    });
+    const github = fakeGitHub(
+      new Map<string, unknown>([
+        [LIST_URL, pulls],
+        ...pulls.map((p) => [statusesUrl(p.head.sha), []] as const),
+        [commitPullsUrl(sha("d")), [pull(2, "closed", sha("d"), head(2))]],
+        [statusesUrl(head(2)), [status({ description: "All 21 tests passed" })]],
+      ]),
+    );
+
+    const snapshot = await fetchSnapshot(github.fetchImpl, null);
+
+    expect(snapshot.prs.map((pr) => pr.number)).toEqual([14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+    expect(snapshot.live).toEqual({
+      sha: sha("d"),
+      pr: 2,
+      verdict: { verdict: "passed", passed: 21, failed: 0, blocked: 0, total: 21 },
+    });
+    expect(github.calls).toHaveLength(15);
+    expect(github.calls.at(-1)?.url).toBe(statusesUrl(head(2)));
+  });
+
+  it("shows not run for the live pull request when TestSprite posted no status on its head", async () => {
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha("d"));
+    const bodies = threePulls();
+    bodies.set(statusesUrl(sha("b")), [status({ context: "Vercel", description: "Deployment has completed" })]);
+
+    const snapshot = await fetchSnapshot(fakeGitHub(bodies).fetchImpl, null);
+
+    expect(snapshot.live).toEqual({ sha: sha("d"), pr: 2, verdict: { verdict: "not run", ...NO_COUNTS } });
+    expect(verdictLine({ verdict: "not run", ...NO_COUNTS })).toBe("TestSprite: not run");
+  });
+
+  it("does not show passed for the live pull request on a same-named status from another creator", async () => {
+    vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha("d"));
+    const bodies = threePulls();
+    bodies.set(statusesUrl(sha("b")), [
+      status({ id: 12, creator: { login: "someone", id: 1, type: "User" }, created_at: "2026-10-19T10:00:00Z" }),
+      status({ id: 11, created_at: "2026-10-19T09:00:00Z" }),
+    ]);
+
+    const snapshot = await fetchSnapshot(fakeGitHub(bodies).fetchImpl, null);
+
+    expect(snapshot.live).toEqual({ sha: sha("d"), pr: 2, verdict: { verdict: "unknown", ...NO_COUNTS } });
   });
 
   it("drops a pull request from a deleted account or another account with the owner's login", async () => {
@@ -288,7 +356,7 @@ describe("readSnapshot", () => {
 
   function sample(): ChecksSnapshot {
     return {
-      live: { sha: null, pr: null },
+      live: { sha: null, pr: null, verdict: null },
       prs: [
         {
           number: 2,
@@ -436,11 +504,22 @@ describe("readSnapshot", () => {
   it("names this deployment's commit, with no pull request, when the stored read was made for another one", async () => {
     const db = await createTestDb();
     vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha("d"));
-    const read = await readSnapshot(db, T0, async () => ({ ...sample(), live: { sha: sha("d"), pr: 2 } }));
-    expect(read.live).toEqual({ sha: sha("d"), pr: 2 });
+    const passed = { verdict: "passed", passed: 12, failed: 0, blocked: 0, total: 12 } as const;
+    const read = await readSnapshot(db, T0, async () => ({ ...sample(), live: { sha: sha("d"), pr: 2, verdict: passed } }));
+    expect(read.live).toEqual({ sha: sha("d"), pr: 2, verdict: passed });
 
     vi.stubEnv("VERCEL_GIT_COMMIT_SHA", sha("e"));
-    expect((await readSnapshot(db, at(60), gitHubDown)).live).toEqual({ sha: sha("e"), pr: null });
+    expect((await readSnapshot(db, at(60), gitHubDown)).live).toEqual({ sha: sha("e"), pr: null, verdict: null });
+  });
+
+  it("still serves a row stored before the live verdict existed, with no live verdict", async () => {
+    const db = await createTestDb();
+    await db.insert(checksSnapshot).values({ id: 1, payload: { ...sample(), live: { sha: null, pr: null } }, fetchedAt: T0 });
+
+    const served = await readSnapshot(db, at(60), gitHubDown);
+
+    expect(served.live).toEqual({ sha: null, pr: null, verdict: null });
+    expect(served.prs).toEqual(sample().prs);
   });
 });
 

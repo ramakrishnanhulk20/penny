@@ -91,7 +91,7 @@ The engine in [packages/core/src](https://github.com/ramakrishnanhulk20/penny/tr
 
 ## The invariants
 
-The rules that bind the pieces together are numbered C1 to C41 in the [threat model](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md). They fall into these groups:
+The rules that bind the pieces together are numbered C1 to C42 in the [threat model](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md). They fall into these groups:
 
 | Group | Numbers | What they cover |
 | --- | --- | --- |
@@ -101,6 +101,6 @@ The rules that bind the pieces together are numbered C1 to C41 in the [threat mo
 | Rendering, limits and errors | C25 to C28 | Text is only ever text, limits hold across instances, no test-only door in production, errors reveal nothing. |
 | Build, preview and CI | C29 to C37 | Previews hold synthetic data, the self-fix agent holds no secret and cannot push, a person merges every robot fix. |
 | Link reset | C38 | A lost answer never leaves a group without a working link. |
-| Later additions | C39 to C41 | One press is one payment, migrations cannot be skipped, stored currency codes stay readable. |
+| Later additions | C39 to C42 | One press is one payment, migrations cannot be skipped, stored currency codes stay readable, the preview cleanup deletes only the closing pull request's own database branch. |
 
 The [security overview](../security/overview.mdx) explains the main ones in plain words.

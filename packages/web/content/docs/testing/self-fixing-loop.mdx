@@ -105,6 +105,6 @@ A second robot commit needs a fresh review: the maintainer removes `reviewed` an
 
 The loop does not decide whether a fix is right. A green check means TestSprite's tests passed, nothing more. That is why a person reads every robot fix before it merges. The loop is also limited by design: two attempts per pull request, and a pull request that is still red after that waits for a person.
 
-GitHub does not start other workflows for a push made with a workflow's own token, so the `ci` workflow (typecheck, lint, unit tests) does not run on a self-fix commit by itself. Closing and reopening the pull request runs it on the new head before the merge.
+GitHub does not start other workflows for a push made with a workflow's own token, so the `ci` workflow (typecheck, lint, unit tests) does not run on a self-fix commit by itself. Before the merge, push an empty commit (`git commit --allow-empty -m "run ci"` then `git push`) to run ci on the robot's fix; this also re-runs TestSprite.
 
 Everything the loop defends against, and the cases it does not, is on [Self-fix safety](../security/self-fix-safety.mdx).
