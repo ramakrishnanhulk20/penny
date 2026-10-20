@@ -1063,7 +1063,7 @@ export async function resetLink(db: Db, group: GroupRow, newToken: string): Prom
       }
       if (row.tokenHash !== group.tokenHash) return NOT_FOUND;
 
-      await tx.update(groups).set({ tokenHash: nextHash }).where(eq(groups.id, group.id));
+      await tx.update(groups).set({ tokenHash: nextHash }).where(eq(groups.tokenHash, nextHash));
       const payload: LinkResetPayload = {};
       await tx.insert(events).values({ groupId: group.id, kind: "link_reset", entityId: group.id, payload });
       return { ok: true, value: { rotated: true } };
