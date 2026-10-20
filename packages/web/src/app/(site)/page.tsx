@@ -1,4 +1,5 @@
 import { Fold } from "@/components/cinema/fold";
+import { Footer } from "@/components/cinema/footer";
 import { Hero } from "@/components/cinema/hero";
 import { Nav } from "@/components/cinema/nav";
 import { SmoothScroll } from "@/components/cinema/smooth-scroll";
@@ -12,6 +13,7 @@ export default function Home() {
         <Nav />
         <Hero />
         <Fold story={sampleTripStory()} />
+        <Footer />
       </main>
     </>
   );

@@ -1,0 +1,72 @@
+---
+title: "Exact to the cent"
+description: "How Penny stores money as whole units, splits a cost so the parts always add up, and decides who gets the leftover cent."
+---
+
+Splitting 100.00 three ways has no exact answer in cents. Penny gives one, states the rule, and uses the same rule every time.
+
+## Money is a whole number of the smallest unit
+
+Every amount is stored as a whole number of the currency's smallest unit, called its minor unit. 12.50 USD is stored as 1250. 1,200 JPY is stored as 1200, because the yen has no smaller unit. 1.250 KWD is stored as 1250, because the Kuwaiti dinar has three decimals. The digits come from the ISO 4217 table. See [Currencies and rates](./currencies-and-rates.mdx).
+
+One parser reads amounts, in the browser and on the server. It accepts plain ASCII decimals only, and it never rounds. These all produce an error instead of a guess:
+
+| Typed | Why it is refused | What you see |
+| --- | --- | --- |
+| `12.505` in USD | More decimals than the currency has | "USD amounts have at most 2 decimals." |
+| `1200.5` in JPY | More decimals than the currency has | "JPY amounts have at most 0 decimals." |
+| `1e3`, `-5`, `0x10`, `1,5`, `012`, `.5` | Not a plain decimal: exponent, sign, hex, separator, leading zero, no digit before the point (spaces and non-ASCII digits are refused too) | "Enter an amount like 12.50." |
+| `0` or `0.00` | Zero | "The amount must be more than zero." |
+| More than 10,000,000,000.00 in a two-decimal currency | Over the cap of 10^12 minor units | "That amount is too large." |
+
+Trailing zeros count as decimals, so `12.500` in USD is refused too.
+
+## The largest remainder rule
+
+When a cost cannot be divided evenly, Penny splits it in three moves:
+
+1. Each person gets the exact share rounded down to a whole unit.
+2. Count the units still unassigned. They are always fewer than the number of people.
+3. Give those units out one each, to the people whose exact shares had the largest fractions left over. If two people tie, the one listed first gets it.
+
+The rounded-down shares plus the leftover units equal the total by construction, so the parts always add up to the expense. The same input gives the same output on every run.
+
+"Listed first" means the order the members were added to the group, not the order you ticked boxes in the form.
+
+### 100.00 split three ways
+
+100.00 is 10000 cents. Divided by 3, each person's exact share is 3333.33 cents. Rounded down, each gets 3333, which adds up to 9999. One cent is left. All three fractions are the same, so it is a tie, and the first person listed takes the cent.
+
+| Person | Exact share | Rounded down | Leftover cent | Part |
+| --- | --- | --- | --- | --- |
+| First listed | 3333.33 | 3333 | yes | 33.34 |
+| Second | 3333.33 | 3333 | no | 33.33 |
+| Third | 3333.33 | 3333 | no | 33.33 |
+
+Together: 33.34 + 33.33 + 33.33 = 100.00. A bug that gave the cent to the last person listed would show 33.33, 33.33 and 33.34, which still adds up but breaks the stated rule. That is exactly the bug planted in [pull request #10](../testing/self-fixing-loop.mdx), and three of the 21 browser tests caught it.
+
+### The dinner, 96.50 split three ways
+
+In the Lisbon trip, dinner at Taberna costs 96.50 EUR, shared by Ana, Ben and Cy. That is 9650 cents. Divided by 3, each exact share is 3216.67 cents. Rounded down, each gets 3216, which adds up to 9648. Two cents are left, again tied, so the first two listed get one each.
+
+Ana 32.17, Ben 32.17, Cy 32.16. The total is 96.50.
+
+### When the fractions differ
+
+Split 100.00 by shares of 1 and 2, with the one-share person listed first. The one-share person's exact share is 3333.33 cents and the two-share person's is 6666.67. Rounded down they get 3333 and 6666, which is 9999. The leftover cent goes to the larger fraction, which is the two-share person, even though they are listed second. The parts are 33.33 and 66.67.
+
+## The three split modes
+
+- Equally: the amount is divided between the people you tick, by the rule above.
+- By shares: each person has a whole number from 1 to 1000, and the amount is divided in proportion to the numbers, by the rule above. The form lets you enter 0 to leave someone out, and it sends only people with a share above 0. A taxi of 31.20 EUR split 2, 1 and 1 gives 15.60, 7.80 and 7.80.
+- By exact amounts: you type each person's part. Nothing is rounded. The parts must add up to the total, or the form says "The exact amounts must add up to 31.20 EUR." with the total and currency of that expense.
+
+A split is accepted only when it is unambiguous: a known mode, each person at most once, and every person a current member of the group.
+
+## Why the preview matches the saved result
+
+The "Add an expense" form shows each person's share before you save. That preview runs the same allocation code the server runs, so what you see is what is stored. See [Add an expense](../guides/add-an-expense.mdx).
+
+## What backs this up
+
+The money engine's tests check that allocation parts always sum to the total, stay within one unit of the exact share, and come out the same on every run. The mutation score for the engine is on [Unit and property tests](../testing/unit-and-property-tests.mdx).

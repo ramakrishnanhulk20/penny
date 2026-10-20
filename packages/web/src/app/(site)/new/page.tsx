@@ -1,3 +1,4 @@
+import { Footer } from "@/components/cinema/footer";
 import { Nav } from "@/components/cinema/nav";
 import { CreateGroupForm } from "./create-group-form";
 
@@ -13,6 +14,7 @@ export default function StartGroupPage() {
         </p>
         <CreateGroupForm />
       </div>
+      <Footer />
     </main>
   );
 }

@@ -1,0 +1,81 @@
+---
+title: "Add an expense"
+description: "Record what someone paid and split it equally, by shares or by exact amounts, in any currency, with every field and message explained."
+---
+
+On a group page, the form headed "Add an expense" records one cost: what it was, how much, who paid, and who shares it.
+
+## The fields
+
+| Field | Rules |
+| --- | --- |
+| "What was it for?" | Required, 1 to 80 characters, for example "Dinner at Taberna". |
+| "Amount" | Required, for example 12.50. Up to the currency's number of decimals: USD 2, JPY 0, KWD 3. |
+| "Currency" | Starts on the group's base currency. |
+| `Rate to <BASE>` | Shown only when the currency differs from the base currency, with the base's code in place of `<BASE>`, such as "Rate to EUR". Prefilled with the ECB reference rate and labelled with its date, such as "ECB reference rate, 2026-10-19". You can change it. |
+| "Paid by" | One member. It starts on the person you chose under "You are:". |
+| "Split" | Three choices, below. |
+
+If no rate can be fetched, the form says "No reference rate available. Enter the rate you used." and the field waits for you. See [Currencies and rates](../concepts/currencies-and-rates.mdx).
+
+## The three ways to split
+
+Choose one under "Split". Below the choices, the form lists each person's share before you save, for example "Ana: 32.17 EUR". The preview runs the same code the server runs, so it is the amount that will be stored.
+
+### "Equally"
+
+There is a checkbox for every member and all are ticked. The amount is divided equally between the ticked people. Any leftover cents go to the members listed first. Untick someone to leave them out.
+
+Dinner at Taberna, 96.50 EUR paid by Cy: untick Dev and the preview shows "Ana: 32.17 EUR", "Ben: 32.17 EUR" and "Cy: 32.16 EUR".
+
+### "By shares"
+
+Each member has a box for a whole number. Use 2 for a couple and 1 for a single person. Use 0 to leave someone out. The amount is divided in proportion to the numbers.
+
+Taxi from airport, 31.20 EUR paid by Ana: enter 2 for Ana, 1 for Ben, 1 for Cy and 0 for Dev. The preview shows "Ana: 15.60 EUR", "Ben: 7.80 EUR" and "Cy: 7.80 EUR".
+
+### "Exact amounts"
+
+Each member has a box for their own amount. A live line under the boxes shows what is still open:
+
+- `<remaining> <CUR> left to assign`, for example "18.00 EUR left to assign"
+- `<excess> <CUR> over the total`, for example "2.00 EUR over the total"
+- "All assigned" once the amounts add up to the expense
+
+Museum tickets, 54.00 EUR paid by Dev: enter 18.00 for Ana, Ben and Dev. The line reads "All assigned".
+
+The rule behind all three is on [Exact to the cent](../concepts/exact-to-the-cent.mdx).
+
+## A foreign currency
+
+Surf lesson, 150.00 USD paid by Cy, shared equally by Ana and Cy, in a group whose base is EUR: set "Currency" to USD. A field "Rate to EUR" appears. Accept the prefilled ECB rate or type 0.92. Press "Add expense" and the list shows "= 138.00 EUR at 0.92" under the expense.
+
+## Messages you may see
+
+| What went wrong | Message |
+| --- | --- |
+| The description is empty | "Describe the expense." |
+| The description is over 80 characters | "Descriptions need 1 to 80 characters, with no hidden formatting." |
+| The description has a hidden formatting character | "Remove hidden formatting characters from the description." |
+| The amount is not a plain decimal | "Enter an amount like 12.50." |
+| The amount has too many decimals | "USD amounts have at most 2 decimals." (JPY: "JPY amounts have at most 0 decimals.") |
+| The amount is zero | "The amount must be more than zero." |
+| The amount is over the cap | "That amount is too large." |
+| The converted amount rounds to zero | "That amount is too small to convert." |
+| No one is chosen to share it | "Choose at least one person to split with." |
+| A share is not a whole number from 0 to 1000 | "Shares are whole numbers from 0 to 1000." |
+| The rate is not a valid rate | "Enter a rate like 0.92." |
+| The rate is empty for a foreign currency | "Enter the rate to EUR." |
+| Exact amounts do not add up | "The exact amounts must add up to 54.00 EUR." |
+
+The last message names the total and the currency of the expense you are entering.
+
+## After you save
+
+The expense appears at the top of the "Expenses" list, which is newest first. Each row shows the description, the amount and currency, and "paid by" with the payer's name. A foreign expense also shows `= <base amount> <BASE> at <rate>`. The balances and the settle-up plan update at once.
+
+Pressing "Add expense" twice quickly, or a dropped connection that makes the browser retry, never adds the expense twice. Each save carries a unique id, and the server answers a repeat with the expense it already has.
+
+## Limits
+
+A group holds at most 500 expenses at once, and 2,000 over its whole life, deleted ones included. A change past a limit shows "This group has reached its size limit." An amount can be up to 10,000,000,000.00 in a two-decimal currency.

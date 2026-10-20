@@ -597,3 +597,68 @@
     transition: none;
   }
 }
+
+/* The nav grid has three cells, so Docs and GitHub share the right one. Each link keeps the GitHub link's classes, so
+   both hide under 640px and the cell is left empty, as it was. */
+.navRight {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 96px;
+  padding: 40px 24px 48px;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.footer > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footerLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+
+.footerLink {
+  color: var(--paper-dim);
+  text-decoration: none;
+  transition: color 160ms var(--ease-out);
+}
+
+.footerLink:hover,
+.footerLink:focus-visible {
+  color: var(--copper-hi);
+}
+
+.footerLink:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 4px;
+}
+
+@media (max-width: 639.98px) {
+  .footer {
+    padding: 32px 16px 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .footerLink {
+    transition: none;
+  }
+}

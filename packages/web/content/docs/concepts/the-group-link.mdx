@@ -1,0 +1,51 @@
+---
+title: "The group link"
+description: "Why Penny has no accounts, what is inside a group link, where the secret travels, and what anyone who holds the link can do."
+---
+
+Penny has no accounts, no passwords and no sign-in. A group is opened by its private link, and the link is the only key.
+
+## What a link is made of
+
+A group link looks like `https://penny-self.vercel.app/g#` followed by a secret. The secret is 22 characters from letters, digits, `-` and `_`. It is 128 random bits from a cryptographic generator, so it cannot be guessed, and it has no relation to the group's name, its id or the time it was made.
+
+The part after `#` is called the fragment. Browsers never send the fragment to a server as part of an address. The group page reads it in the browser and sends it to Penny's API in a request header called `x-penny-group`. That means the secret never lands in a server's address log, and it is not passed along as a referrer to other sites. Group pages also send `Referrer-Policy: no-referrer`, ask search engines not to index them, and load no third-party scripts.
+
+## What the server remembers
+
+When a group is created, the server makes the secret, returns it once, and stores only its SHA-256 hash. Reading the database alone gives no working link. The server cannot show you your link again, because it does not have it.
+
+One function turns a secret into a group, and every entry point uses it. It checks the exact format first, so anything that is not 22 characters from that alphabet is rejected before the database is touched.
+
+## A link that does not work
+
+Any link that is malformed, unknown or reset shows the same page: "This link doesn't open a group. It may have been reset. Ask the group for the current link." with a "Start a group" button. The page cannot tell you which of the three it was, and neither can anyone probing for groups. The API gives the same answer, `404 {"error":{"code":"not_found"}}`, for an unknown secret, a malformed one, a reset one, and an id that belongs to some other group.
+
+## The "You are:" selector
+
+The group page has a selector labelled "You are:", which starts on "Choose your name". The choice is remembered on this device only, and it pre-selects "Paid by" in the expense form. It is a convenience, not a login. It proves nothing about who is using the page.
+
+## What a link holder can do
+
+Anyone who holds a group's link can do everything a member can:
+
+- add, edit and delete expenses
+- add members, and remove those who have no history
+- record payments with "Mark as paid" and remove them with "Undo"
+- change the base currency, until money is recorded
+- make a new link with "Reset link"
+
+That includes deleting every expense. "Who did what" is self-reported, because "You are:" is a local choice. Share the link only with people you would trust with the group's whole ledger.
+
+A link holder cannot read or change any other group. Every id in a request, such as an expense, a member or a payment, must belong to the group the secret names. A foreign id gets the same 404 as an unknown link.
+
+Every change is also written to an append-only event log, and database triggers refuse any attempt to alter or remove a log row. The log does not say who acted, but it means history cannot be quietly rewritten.
+
+## If a link leaks or is lost
+
+- If a link has gone to someone it should not have, press "Reset link". The old link stops working for everyone, and the group gets a new one. A group can always reset its link, even when it is full. The steps are in [Share and reset](../guides/share-and-reset.mdx).
+- If everyone has lost the link, there is no recovery. Penny has no account to prove you are a member and does not hold the secret. A browser that opened the link may still have it in its history.
+
+## The trade-off
+
+No sign-up means nothing to forget and nothing to leak but the link. It also means the link is both the identity and the key. The [threat model](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md) lists this by name as something Penny does not defend against: a person who holds the link. The list of what it does defend against is on the [security overview](../security/overview.mdx).

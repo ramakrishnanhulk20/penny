@@ -1,3 +1,4 @@
+import { Footer } from "@/components/cinema/footer";
 import { Nav } from "@/components/cinema/nav";
 import { ChecksScreen } from "./checks-screen";
 
@@ -19,6 +20,7 @@ export default function ChecksPage() {
         </p>
       </div>
       <ChecksScreen />
+      <Footer />
     </main>
   );
 }

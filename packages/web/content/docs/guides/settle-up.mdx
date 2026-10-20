@@ -1,0 +1,42 @@
+---
+title: "Settle up"
+description: "Record payments with Mark as paid, take one back with Undo, and what happens when the page you are looking at is out of date."
+---
+
+The "Settle up" section lists the fewest payments that bring every balance to zero. How Penny finds them is on [Settling up](../concepts/settling-up.mdx). This page is about using the list.
+
+## Mark a payment as paid
+
+Each line in "Settle up" reads `<From> pays <To> <amount> <BASE>`, for example "Cy pays Ben 81.34 EUR", and has a "Mark as paid" button.
+
+1. Pay the person outside Penny, however you like. Penny moves no money.
+2. Press "Mark as paid" on that line.
+3. The payment moves into the "Payments" list as "Cy paid Ben 81.34 EUR". The balances and the plan update at once, and the proof line under the plan changes with them.
+
+Recording a payment is a claim that it happened. Penny cannot check it.
+
+When the last payment is recorded, "Settle up" reads "Everyone is settled up." and every balance reads "Ana is settled up", "Ben is settled up" and so on, one per member.
+
+## Undo a payment
+
+Each row in the "Payments" list has an "Undo" button. Press it and the payment is removed, the debt comes back, and the plan shows the line again. Before any payment is recorded, the list reads "No payments yet."
+
+Try it on the sample trip: press "Mark as paid" on "Dev pays Ana 141.93 EUR", watch Ana's balance drop to "Ana is owed 13.81 EUR" and Dev's become "Dev is settled up", then press "Undo".
+
+## A page that is out of date
+
+Two people can have the same group open, or you can have it open on a second phone. If one of you records a payment, the other's page is out of date until it reloads.
+
+If you press "Mark as paid" or "Undo" on a page that is behind, Penny does not record anything a second time. It loads the latest group and shows "This was already changed. Showing the latest." Look at the new plan and press the button again if the line is still there.
+
+This works because each payment names the version of the group that its plan line came from. Every change to expenses or payments moves that version on. A payment that names an old version is refused.
+
+One exception keeps retries safe. If your connection drops after you press "Mark as paid" and the browser sends the same press again, the server recognises it and returns the payment it already recorded. One press is always one payment.
+
+The same message appears when the payment or a member it names is gone, for example because someone undid it a moment before.
+
+## If it does not work
+
+- "This group has reached its size limit." appears when the group already holds 500 payments, or 2,000 over its life. See [Fix a mistake](./fix-a-mistake.mdx) for the limits.
+- "Something went wrong. Try again." covers any unexpected failure.
+- "Too many requests from your network. Wait a minute and try again." appears past the write limit for one network.

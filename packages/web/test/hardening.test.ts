@@ -33,6 +33,11 @@ import { editBody, expenseBody, freshAddress, paymentBody, startGroup } from "./
 // connection() only works inside a live Next request; here it only needs to let the handler continue.
 vi.mock("next/server", () => ({ connection: async () => undefined }));
 
+// The docs source uses the fumadocs-mdx macro, which needs that package's bundler plugin, and vitest does not run it.
+// The search route is imported here only for its time limit, and createFromSource reads the source only when a search
+// runs, so an empty stand-in is enough.
+vi.mock("@/lib/source", () => ({ source: {} }));
+
 const T0 = new Date("2026-10-19T12:00:05.000Z");
 const SOME_ID = "00000000-0000-4000-8000-000000000000";
 const RATE_LIMITED = '{"error":{"code":"rate_limited"}}';

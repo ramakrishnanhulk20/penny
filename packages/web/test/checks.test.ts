@@ -4,7 +4,7 @@
 // stand-in lock answer; Neon itself; and the /checks page in a browser (only its verdict line, as text).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET } from "@/app/api/checks/route";
-import { verdictLine } from "@/app/checks/checks-screen";
+import { verdictLine } from "@/app/(site)/checks/checks-screen";
 import { type Db, setDbForTests } from "@/db/client";
 import { checksSnapshot } from "@/db/schema";
 import { createTestDb } from "@/db/testing";

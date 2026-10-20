@@ -1,0 +1,54 @@
+/* Unlayered on purpose: fumadocs-ui/style.css puts everything inside @layer, so these rules win over it. */
+:root,
+.dark {
+  --color-fd-background: #0B0A09;
+  --color-fd-foreground: #F2EEE8;
+  --color-fd-muted: #14110E;
+  --color-fd-muted-foreground: #8A847C;
+  --color-fd-popover: #14110E;
+  --color-fd-popover-foreground: #F2EEE8;
+  --color-fd-card: #14110E;
+  --color-fd-card-foreground: #F2EEE8;
+  --color-fd-border: rgba(242, 238, 232, 0.14);
+  --color-fd-primary: #C8763E;
+  --color-fd-primary-foreground: #0B0A09;
+  --color-fd-secondary: #1A1612;
+  --color-fd-secondary-foreground: #F2EEE8;
+  --color-fd-accent: rgba(200, 118, 62, 0.12);
+  --color-fd-accent-foreground: #F2EEE8;
+  --color-fd-ring: #C8763E;
+  --color-fd-info: #8AA4D6;
+  --color-fd-success: #7FB8A4;
+  --color-fd-warning: #E39A62;
+  --color-fd-error: #E2606B;
+  /* The coin mark in the docs nav paints with the site's tokens, and globals.css is not loaded here. */
+  --copper: #C8763E;
+  --ink: #0B0A09;
+}
+
+/* Fumadocs sets its own sidebar colours on this element, so the palette is repeated here. */
+.dark #nd-sidebar {
+  --color-fd-muted: #14110E;
+  --color-fd-muted-foreground: #8A847C;
+  --color-fd-secondary: #1A1612;
+  --color-fd-secondary-foreground: #F2EEE8;
+}
+
+/* The page title is the article's own h1; headings written in the page body sit inside .prose and keep theirs. */
+#nd-page > h1 {
+  font-weight: 520;
+  letter-spacing: -0.035em;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+.docs-chart {
+  display: flex;
+  justify-content: center;
+  margin: 1.5em 0;
+}

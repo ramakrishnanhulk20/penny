@@ -1,0 +1,62 @@
+---
+title: "Run it locally"
+description: "Clone the repository, run the tests with no database, then start the app against a Neon Postgres database."
+---
+
+## What you need
+
+Node 22.13 or later, and npm. CI runs Node 24. Running the tests needs nothing else. Running the app needs a Neon Postgres database.
+
+## Clone and test
+
+```bash
+git clone https://github.com/ramakrishnanhulk20/penny.git
+cd penny
+npm ci
+npm test
+```
+
+The tests need no database: the web tests start an in-process Postgres (PGlite, Postgres compiled to WebAssembly). `npm test` prints Vitest's summary for `@penny/core` first, then for `@penny/web`: the test files and tests passed in each package.
+
+## Start the app
+
+Penny talks to Postgres through Neon's serverless driver, so a Neon connection string is what `DATABASE_URL` expects.
+
+```bash
+export DATABASE_URL="postgresql://..."
+npm exec -w @penny/web -- tsx scripts/migrate.ts
+npm run dev -w @penny/web
+```
+
+On Windows PowerShell, set the variable with `$env:DATABASE_URL = "postgresql://..."`.
+
+The migration step applies the SQL files in [packages/web/drizzle](https://github.com/ramakrishnanhulk20/penny/tree/main/packages/web/drizzle) in order. It stops with an error naming any migration that was skipped. `npm run build -w @penny/web` runs the same step before `next build`.
+
+The app is then at `http://localhost:3000`. These docs are part of the same app, at `http://localhost:3000/docs`.
+
+## Environment variables
+
+The names come from [packages/web/.env.example](https://github.com/ramakrishnanhulk20/penny/blob/main/packages/web/.env.example). Never commit values.
+
+| Name | Required | What it is for |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes | The Neon Postgres connection string. Vercel's Neon integration sets it for each environment, so a preview uses its own branch. |
+| `GITHUB_READ_TOKEN` | No | A fine-grained, read-only token for this public repository, used on the server by `/api/checks`. Without it GitHub is read anonymously, as for any visitor. |
+
+## Other commands
+
+| Command | What it does |
+| --- | --- |
+| `npm run typecheck` | Type-checks both packages. |
+| `npm run lint` | Runs ESLint on the web package. |
+| `npm run mutate -w @penny/core` | Mutation testing of the money engine with StrykerJS. See [Unit and property tests](../testing/unit-and-property-tests.mdx). |
+| `node --test "scripts/self-fix/*.test.mjs" "scripts/review-gate/*.test.mjs"` | Runs the tests of the workflow scripts. |
+| `SKIP_MIGRATE=1` | Set this to run a build with no database. |
+
+## Where things are
+
+- `packages/core` is the money engine: pure functions, no network, no database.
+- `packages/web` is the Next.js app, its API routes, its database code and these docs.
+- `scripts/` holds the self-fix and review-gate scripts, and `.github/workflows/` the five workflows that use them.
+
+[Architecture](../developers/architecture.mdx) explains how the pieces fit together.

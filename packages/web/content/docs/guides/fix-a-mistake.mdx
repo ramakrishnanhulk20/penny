@@ -1,0 +1,75 @@
+---
+title: "Fix a mistake"
+description: "Edit or delete an expense, undo a payment, add or remove a member and change the base currency, with the exact message for each refusal."
+---
+
+Every change is written to an append-only log, and balances are always worked out from what is stored. A correction therefore changes the balances and the plan at once, with no leftover state to clean up.
+
+## Edit an expense
+
+1. In the "Expenses" list, press "Edit" on the row.
+2. The form under the list is now headed "Edit expense" and holds that expense, including its rate if it has one. It has the buttons "Save changes" and "Cancel".
+3. Change what you need and press "Save changes". The expense, the balances and the plan update.
+
+After "Save changes", or after "Cancel", the form goes back to "Add an expense", empty.
+
+An edit names the version of the expense it started from. If someone else changed the expense first, the edit is refused and the form says "This expense was changed by someone else. Reload to see the latest." Reload, look at the new version and edit again. A deleted expense cannot be edited.
+
+## Delete an expense
+
+1. Press "Delete" on the row. The row asks "Delete this expense?" with the buttons "Delete" and "Cancel".
+2. Press "Delete" to confirm. The expense leaves the list and the balances.
+
+If someone else changed the expense first, the same message appears, "This expense was changed by someone else. Reload to see the latest.", and the expense stays.
+
+A deleted expense is hidden but not erased. It stays in the group's history, which matters for the two rules below.
+
+## Undo a payment
+
+Press "Undo" next to the payment in the "Payments" list. The debt comes back. See [Settle up](./settle-up.mdx), including the message "This was already changed. Showing the latest." for a page that is out of date.
+
+## Add a member
+
+In the "Members" section, type a name in "New member" and press "Add member". The name rules are the same as when starting a group, and the messages are too.
+
+| What went wrong | Message |
+| --- | --- |
+| The name matches another member, ignoring letter case | "Each member needs a different name." |
+| The name is over 40 characters | "Names can be at most 40 characters." |
+| The name has a hidden formatting character | "Remove hidden formatting characters from this name." |
+| The group already has 20 members | "A group can have at most 20 members." |
+
+## Remove a member
+
+"Remove" appears next to a member only when all three of these are true:
+
+- their balance is exactly zero
+- they appear in no expense or payment, deleted ones included
+- the group has more than two members
+
+Otherwise the button is not there. If the member gained an expense or payment in the moment before "Remove" landed, for example from another phone, the page shows "Only a member with no expenses or payments can be removed."
+
+Removing a member never changes anyone else's balance. This rule is for someone added by mistake. A person who has appeared in any expense or payment stays in the group, even if that expense was later deleted, so the history stays complete.
+
+## Change the base currency
+
+The "Base currency" list and its "Change" button are shown only while the group has never had an expense or payment. Pick a currency and press "Change".
+
+Once an expense or payment has been recorded, even one that was later deleted, the page shows "Base currency is fixed once money is recorded." instead. Stored rates mean "this currency into the base", and changing the base would quietly change what every rate means. To use a different base after that, start a new group.
+
+## When a change is refused
+
+| Situation | What you see |
+| --- | --- |
+| Someone else changed the expense first | "This expense was changed by someone else. Reload to see the latest." |
+| A payment action on an out-of-date page | "This was already changed. Showing the latest." |
+| The group has reached a size limit | "This group has reached its size limit." |
+| Too many changes from one network in a minute | "Too many requests from your network. Wait a minute and try again." |
+| Anything unexpected | "Something went wrong. Try again." |
+
+## Size limits
+
+- A group has 2 to 20 members.
+- A group holds at most 500 live expenses and 500 live payments.
+- Over a group's whole life it can take 2,000 expenses (deleted ones included), 2,000 payments (undone ones included) and 10,000 changes of any kind.
+- A group past one of these lifetime limits can still be opened and read, but not changed in that way. Past 10,000 changes it cannot be changed at all, except that its link can still be reset, so a leaked link can always be cut off.

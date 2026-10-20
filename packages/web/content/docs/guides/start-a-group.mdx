@@ -1,0 +1,50 @@
+---
+title: "Start a group"
+description: "Make a group with a name, a base currency and two to twenty members, and what each error message means."
+---
+
+A group has a name, a base currency and 2 to 20 members. Creating one takes one form and no account.
+
+## Open the form
+
+On the home page press "Start a group". It goes to `/new`. If you only want to look around first, press "Try a sample trip" instead. That makes a brand-new group filled with the Lisbon trip, and every press makes a new, separate group.
+
+## The fields
+
+| Field | Rules |
+| --- | --- |
+| "Group name" | Required, 1 to 60 characters. |
+| "Base currency" | A list of ISO 4217 currencies, EUR by default. Every balance is shown in this currency. |
+| "Members" | Starts with 2 name fields. "Add member" adds another field, up to 20 in all. Each extra field has a "Remove" button. Each name is 1 to 40 characters. |
+
+Two members cannot have the same name, and letter case is ignored. "Ana" and "ana" count as the same name. Names are compared after Unicode normalisation, so a name typed with a combining accent matches the same name typed as one character.
+
+Press "Create group" when you are done.
+
+## Messages you may see
+
+Each message appears under the field it belongs to.
+
+| What went wrong | Message |
+| --- | --- |
+| The group name is empty | "Give the group a name." |
+| Fewer than two members have a name | "Add at least two members." |
+| Two members have the same name | "Each member needs a different name." |
+| A member name is over 40 characters | "Names can be at most 40 characters." |
+| The group name is over 60 characters | "Group names can be at most 60 characters." |
+| A member name has a hidden formatting character | "Remove hidden formatting characters from this name." |
+| The group name has a hidden formatting character | "Remove hidden formatting characters from the group name." |
+
+A hidden formatting character is something like a text-direction mark or an invisible space. It can make two different names look identical, so Penny refuses it. The joining characters inside emoji such as a family emoji, and inside Persian, Hindi and Sinhala spellings, are allowed.
+
+Any unexpected failure shows "Something went wrong. Try again." Too many requests from one network in a minute show "Too many requests from your network. Wait a minute and try again."
+
+## After you create the group
+
+The browser opens the group page. A banner reads "Group created. Share this link with your group:", followed by the full link and a "Copy link" button. Send that link to the people in the group. It is the only way in, so keep a copy yourself. See [Share and reset](./share-and-reset.mdx).
+
+From here:
+
+- [Add an expense](./add-an-expense.mdx) to record the first cost.
+- Add a member later with the "New member" field and the "Add member" button in the "Members" section. A group can have at most 20 members.
+- The base currency can be changed only until the first expense or payment is recorded. See [Fix a mistake](./fix-a-mistake.mdx).
