@@ -29,7 +29,7 @@ export function MetaRow() {
       </motion.div>
       <motion.div {...cell(2)}>
         <dt>Currencies</dt>
-        <dd>{CURRENCY_COUNT}, with ECB reference rates</dd>
+        <dd>{`${CURRENCY_COUNT}, ECB reference rates where the ECB publishes one`}</dd>
       </motion.div>
       <motion.div {...cell(3)}>
         <dt>Tested</dt>

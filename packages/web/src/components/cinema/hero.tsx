@@ -28,19 +28,20 @@ export function Hero() {
             <Grain />
             <div className={styles.scrim} />
             <div className={styles.copy}>
+              {/* Movement only, never a fade from 0: the server HTML must show the words before any script runs. */}
               <motion.h1
                 id="hero-title"
                 className={styles.headline}
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ y: 24 }}
+                animate={{ y: 0 }}
                 transition={{ duration: 0.7, ease: EASE_OUT, delay: 0.9 }}
               >
                 Split shared costs to the penny.
               </motion.h1>
               <motion.p
                 className={styles.lede}
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
+                initial={{ y: 24 }}
+                animate={{ y: 0 }}
                 transition={{ duration: 0.7, ease: EASE_OUT, delay: 1.0 }}
               >
                 Add what everyone paid. Penny works out the fewest payments to settle up, exact to the last cent.

@@ -3,7 +3,7 @@ title: "Security overview"
 description: "What protects a group, its money and the build pipeline, linked to the numbered rules in the threat model, and what Penny does not defend against."
 ---
 
-Penny's security rules are written down as 41 numbered invariants, C1 to C41, in the [threat model](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md). That file was written before the code, and its section C is the definition of done: the build is complete only when every invariant can be shown to hold.
+Penny's security rules are written down as 42 numbered invariants, C1 to C42, in the [threat model](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md). That file was written before the code, and its section C is the definition of done: the build is complete only when every invariant can be shown to hold.
 
 In security terms Penny is five systems at once: a store of many groups with a link as the only key, a small money ledger, a place that shows user-written text to other people, a caller of fixed outside services, and a build pipeline that runs pull request code and gives an AI coding agent text derived from it. The last one carries the highest risk, and it has its own page: [Self-fix safety](./self-fix-safety.mdx).
 
@@ -37,7 +37,7 @@ Rate limits are rows in Postgres, so they hold across serverless instances. Grou
 
 ## The build pipeline
 
-No job that runs pull request code holds a secret. Preview databases hold synthetic data only, and the production database address and the GitHub token are scoped to production. The self-fix agent has file tools only, a separate job with no AI checks its patch, and a person merges every robot fix. Third-party actions are pinned to full commit ids, and the tools that hold secrets install at pinned versions without running install scripts. Rules: [C29 to C37](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#build-preview-and-ci). The details are on [Self-fix safety](./self-fix-safety.mdx).
+No job that runs pull request code holds a secret. Preview databases hold synthetic data only, and the production database address and the GitHub token are scoped to production. The self-fix agent has file tools only, a separate job with no AI checks its patch, and a person merges every robot fix. Third-party actions are pinned to full commit ids, and the tools that hold secrets install at pinned versions without running install scripts. The job that deletes a closed pull request's preview database runs no repository code, holds a key that reaches only the preview project, and deletes only that pull request's own branch. Rules: [C29 to C37 and C42](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/security/threat-model.md#build-preview-and-ci). The details are on [Self-fix safety](./self-fix-safety.mdx).
 
 ## What Penny does not defend against
 
@@ -53,4 +53,5 @@ The threat model names these on purpose, so nobody has to guess.
 - Denial of service beyond what the hosting platform absorbs.
 - The runtime changing the schema. The app connects as the database owner role that Neon's integration provides, so code running as the app could change the schema or drop the triggers that keep events append-only. The triggers stop a bug or a stray statement, not the owner.
 - Inline script under the content security policy. The policy allows inline scripts because Next.js inlines its own bootstrap scripts into prerendered pages. Injected markup is stopped by React's escaping and the control-character refusal, not by the policy.
+- Inline styles under the content security policy. The policy allows inline styles because motion, GSAP and Mermaid set them as they draw. Mermaid renders only diagrams written in this repository, with its strict security level.
 - A malicious maintainer.

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Footer } from "@/components/cinema/footer";
 import { Nav } from "@/components/cinema/nav";
 import { ChecksScreen } from "./checks-screen";
@@ -17,6 +18,15 @@ export default function ChecksPage() {
           {
             "When TestSprite fails one of these pull requests, a locked-down job asks Claude Code for a fix, a script with no AI in it checks the change before it is pushed, and TestSprite tests the fix again. A person reads and merges every fixed pull request."
           }
+        </p>
+        <p className="lede">
+          {
+            'Pull requests titled "Study" are planted bugs from a catch-rate study: each adds one deliberate bug, TestSprite tests it, and it is closed unmerged. The results are '
+          }
+          <Link href="/docs/testing/testsprite-suite#planted-bug-study" prefetch={false}>
+            in the docs
+          </Link>
+          .
         </p>
       </div>
       <ChecksScreen />

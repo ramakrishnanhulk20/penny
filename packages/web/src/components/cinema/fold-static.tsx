@@ -40,6 +40,18 @@ export function formatSignedCents(cents: number): string {
   return `${cents < 0 ? "-" : "+"}${whole}.${fraction}`;
 }
 
+/**
+ * Says how many leftover cents an uneven split handed out. Each part above the smallest one took exactly one leftover
+ * cent, so counting them in whole cents gives the number without any float.
+ */
+export function leftoverLine(parts: readonly { readonly base: string }[]): string {
+  const cents = parts.map((part) => centsOf(part.base));
+  const smallest = Math.min(...cents);
+  const leftover = cents.filter((value) => value > smallest).length;
+  if (leftover === 1) return "The leftover cent goes to the first person listed.";
+  return `The ${numberWord(leftover)} leftover cents go to the first ${numberWord(leftover)} people listed.`;
+}
+
 export function foldCopy(story: SampleTripStory): FoldCopy {
   const currencies = new Set(story.expenses.map((expense) => expense.currency)).size;
   const currencyWords = currencies === 1 ? "one currency" : `${numberWord(currencies)} currencies`;
@@ -64,7 +76,7 @@ export function foldCopy(story: SampleTripStory): FoldCopy {
               `${uneven.description} ${uneven.amount} ${uneven.currency} → ${uneven.parts
                 .map((part) => `${part.person} ${part.base}`)
                 .join(" · ")}`.toUpperCase(),
-            lineTwo: "The leftover cent goes to the first person listed.",
+            lineTwo: leftoverLine(uneven.parts),
           },
     rail: ["01 Receipts", "02 Balances", "03 Payments"].map((label) => label.toUpperCase()),
   };

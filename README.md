@@ -25,8 +25,8 @@ The `maintainer-review` gate did not exist yet; it arrived in PR #11. From then 
 | Judging line | Where to see it |
 | --- | --- |
 | Project quality: does the live app work well | The [live app](https://penny-self.vercel.app) and [the two-minute judge path](#the-two-minute-judge-path). Every number on every screen, the home page's animation included, comes from the money engine. |
-| Coverage breadth | 21 browser tests across groups, splitting, currency, corrections and settling ([the list](#what-the-suite-covers)), plus unit, property and database tests in three packages. |
-| Assertion depth | The browser tests assert exact values ("33.34", "155.74 EUR", "3 payments settle 7 expenses."), not that a page loaded. The planted bug in PR #10 moved one cent and three of them failed. The money engine's tests kill 91.19 percent of StrykerJS mutants. |
+| Coverage breadth | 24 browser tests across groups, splitting, currency, corrections and settling ([the list](#what-the-suite-covers)), plus unit, property and database tests in three packages. |
+| Assertion depth | The browser tests assert exact values ("33.34", "155.74 EUR", "3 payments settle 7 expenses."), not that a page loaded. The planted bug in PR #10 moved one cent and three of them failed. The money engine's tests kill 91.29 percent of StrykerJS mutants (measured 20 October 2026 by a clean clone). A [planted-bug study](#planted-bug-study): 8 one-change bugs, 5 caught by the first 21 tests, all 8 after three tests aimed at the misses were added. |
 | Scenario design | Each browser test starts from the home page with its own fresh group and fixed data, so tests never share state and a failure points at one behaviour. |
 | Fires on every pull request | Every pull request since the suite existed carries a `TestSprite V3` status; [/checks](https://penny-self.vercel.app/checks) lists them with their counts. |
 | Holds the merge | `main` requires `TestSprite V3`, pinned to TestSprite's app, for administrators too. PR #10 could not merge while it was red. |
@@ -43,7 +43,7 @@ The branch rule on `main` requires a pull request, applies to administrators, an
 
 | Required check | Posted by | Pinned to | Meaning |
 | --- | --- | --- | --- |
-| `TestSprite V3` | TestSprite's GitHub App | App id 2756476 | The 21 browser tests passed on this pull request's preview |
+| `TestSprite V3` | TestSprite's GitHub App | App id 2756476 | The browser tests (24 today) passed on this pull request's preview |
 | `maintainer-review` | The `maintainer-review` workflow | GitHub Actions (app id 15368) | Green at once if no robot commit exists; otherwise pending until the `reviewed` label is added after the last one |
 
 A job that borrows either name cannot satisfy the rule, because each check is pinned to its source. The `ci` workflow (typecheck, lint, unit tests) also runs on every pull request, but it is not a required check.
@@ -60,7 +60,7 @@ Penny turns that into a short list. You add what each person paid. Penny splits 
 | Several currencies, with a stated rate | Yes. One conversion per expense, half up, at a rate you can read and edit | You look up and paste the rate | Varies |
 | Fewest payments | Yes, the true minimum for up to 16 people with a balance, greedy beyond | By hand | Some simplify debts, often with a shortcut |
 | No account | Yes. A private link opens the group | Usually needs an account to share | Usually needs a sign-up |
-| Tested on every change to the app | Yes. 21 browser tests and the unit tests, and the merge waits for the browser tests | No | Not shown to users |
+| Tested on every change to the app | Yes. 24 browser tests and the unit tests, and the merge waits for the browser tests | No | Not shown to users |
 
 The last two columns describe the usual case, not a review of any one product.
 
@@ -73,7 +73,7 @@ Each feature lists the rule that makes it exact.
 - Rule: every amount is stored as a whole number of the currency's smallest unit (JPY has none, USD has 2, KWD has 3, from the ISO 4217 table). Leftover units go one each to the largest remainders, ties to whoever is listed first, so the parts always add up to the expense.
 
 **Convert**
-- An expense can be in any ISO 4217 currency. For a foreign one, the rate is prefilled with the European Central Bank reference rate for the latest day, labelled with its date. You can type your own.
+- An expense can be in any ISO 4217 currency. For a foreign one, when the European Central Bank publishes a rate for that pair, the rate is prefilled with its reference rate for the latest day, labelled with its date; otherwise you type it. You can always type your own.
 - Rule: one conversion per expense, rounded half up, in exact integer arithmetic. The base-currency parts are the foreign parts re-split over the converted total, so they add up too. A rate has at most 10 decimals and lies between 0 and 1,000,000.
 
 **Settle**
@@ -94,9 +94,9 @@ Each feature lists the rule that makes it exact.
 
 ## What the suite covers
 
-### TestSprite: 21 browser tests on every pull request
+### TestSprite: 24 browser tests on every pull request
 
-The names are TestSprite's own, as listed in its [comment on PR #10](https://github.com/ramakrishnanhulk20/penny/pull/10#issuecomment-6284111373).
+The names are TestSprite's own. The first 21 are listed in its [comment on PR #10](https://github.com/ramakrishnanhulk20/penny/pull/10#issuecomment-6284111373); the last three were added after the [planted-bug study](#planted-bug-study).
 
 | Area | Tests |
 | --- | --- |
@@ -105,10 +105,11 @@ The names are TestSprite's own, as listed in its [comment on PR #10](https://git
 | Currency (2) | Convert a yen hotel bill into euros at a typed rate. Fill in the ECB reference rate for a foreign expense. |
 | Correcting expenses (2) | Edit an expense and the balances follow. Delete an expense only after confirming. |
 | Balances and settling (5) | Two opposite expenses settle everyone to zero. Settle a four-person trip in two payments. Open a sample trip with exact balances and a three-payment plan. Mark payments as paid until everyone is settled. Undo a payment and the debt comes back. |
+| Added after the study (3) | Convert at a rate that lands on half a cent. Settle up in the fewest payments when the simple plan needs more. Reset link: the old link opens nothing and the new one opens the group. |
 
 ### Unit and property tests, by package
 
-1,130 tests, all passing on 20 October 2026: 230 for the money engine, 744 for the app, 156 for the workflow scripts. Every test file names what it does not cover in its first lines.
+1,140 tests, all passing on 20 October 2026: 230 for the money engine, 751 for the app, 159 for the workflow scripts. Every test file names what it does not cover in its first lines.
 
 **`@penny/core`, the money engine**
 - Amount and rate parsing take plain ASCII decimals only. Signs, exponents, hex, separators, spaces, non-ASCII digits, too many decimals and zero are refused.
@@ -117,7 +118,7 @@ The names are TestSprite's own, as listed in its [comment on PR #10](https://git
 - Balances sum to exactly zero for random entries in any currencies.
 - Settle-up has the fewest payments, checked against an independent exhaustive search. It is never worse than the greedy plan and gives the same plan whatever order the balances arrive in.
 - The ISO 4217 table is pinned: a regenerated table that drops or changes a code fails.
-- Mutation testing with StrykerJS (`npm run mutate -w @penny/core`) scored 91.19 percent when last run. The command fails under 85.
+- Mutation testing with StrykerJS (`npm run mutate -w @penny/core`) scored 91.29 percent, measured on 20 October 2026 by a clean clone. The command fails under 85.
 
 **`@penny/web`, the app**
 - The API routes run against a real Postgres engine (PGlite, Postgres compiled to WebAssembly), so no cloud database is needed.
@@ -146,6 +147,39 @@ nested CLAUDE.md obeyed: no
 mcp servers at init: 0
 auth ok: yes
 ```
+
+## Planted-bug study
+
+Eight pull requests titled "Study" each plant one deliberate bug. TestSprite tests each one, and each is closed unmerged.
+
+| Bug | Pull request | The planted bug | First run, 21 tests |
+| --- | --- | --- | --- |
+| b1 | [#16](https://github.com/ramakrishnanhulk20/penny/pull/16) | Conversion rounds down | Missed |
+| b2 | [#17](https://github.com/ramakrishnanhulk20/penny/pull/17) | Settle-up uses the greedy plan | Missed |
+| b3 | [#18](https://github.com/ramakrishnanhulk20/penny/pull/18) | Payments counted the wrong way round | Caught |
+| b4 | [#19](https://github.com/ramakrishnanhulk20/penny/pull/19) | Names compared with letter case | Caught |
+| b5 | [#20](https://github.com/ramakrishnanhulk20/penny/pull/20) | Base currency lock needs a payment too | Caught |
+| b6 | [#21](https://github.com/ramakrishnanhulk20/penny/pull/21) | Reset link changes nothing | Missed |
+| b7 | [#22](https://github.com/ramakrishnanhulk20/penny/pull/22) | JPY gets 2 decimals | Caught |
+| b8 | [#23](https://github.com/ramakrishnanhulk20/penny/pull/23) | Delete skips the confirmation | Caught |
+
+TestSprite caught 5 of 8. The unit tests caught b1 to b7; only the browser suite caught b8.
+
+Three tests were then added to the TestSprite suite, one aimed at each miss, making 24:
+
+- "Convert at a rate that lands on half a cent": 10.05 USD at 0.5 must show "= 5.03 EUR at 0.5".
+- "Settle up in the fewest payments when the simple plan needs more": a five-person trip that settles in exactly 3 payments, where the greedy plan needs 4.
+- "Reset link: the old link opens nothing and the new one opens the group".
+
+The three missed bugs were tested again with all 24 tests ([#16](https://github.com/ramakrishnanhulk20/penny/pull/16), [#17](https://github.com/ramakrishnanhulk20/penny/pull/17) and [#21](https://github.com/ramakrishnanhulk20/penny/pull/21), reopened with a fresh preview, so their latest check now reads "23/24 passed, 1 failed"). Each time the one failure was the new test aimed at that bug. Each new test passed on the other two planted bugs and on production, so none of them fails on correct code.
+
+| Bug | First run, 21 tests | After the three new tests, 24 tests |
+| --- | --- | --- |
+| b1 conversion rounds down | Missed | Caught by "Convert at a rate that lands on half a cent" |
+| b2 settle-up uses the greedy plan | Missed | Caught by "Settle up in the fewest payments when the simple plan needs more" |
+| b6 reset link changes nothing | Missed | Caught by "Reset link: the old link opens nothing and the new one opens the group" |
+
+The suite now catches all 8 planted bugs.
 
 ## Diagrams
 
@@ -243,7 +277,7 @@ flowchart TD
 3. Press **Mark as paid** on one line. It moves into **Payments**, and the balances and the plan change at once. Press **Undo** and the line comes back.
 4. In **Expenses**, press **Edit** on "Surf lesson". The form is headed "Edit expense" and holds 150.00 USD at the rate 0.92; the list shows "= 138.00 EUR at 0.92". Press **Cancel**.
 5. Press **Copy link**. It says "Link copied". Paste it into a private window and the same group opens, because the secret after `#` is the key.
-6. Open https://penny-self.vercel.app/checks. It shows the commit that is live, the TestSprite verdict that allowed it to ship, and the recent pull requests with their pass and fail counts. Pull request #10 is listed there while it is among the twelve newest.
+6. Open https://penny-self.vercel.app/checks. It shows the commit that is live, the TestSprite verdict that allowed it to ship, and the twelve newest pull requests with their pass and fail counts. Pull requests titled "Study" are the planted bugs of the [planted-bug study](#planted-bug-study).
 7. Open [pull request #10](https://github.com/ramakrishnanhulk20/penny/pull/10) and read the failing check, the robot's one-line commit and the green check that followed.
 
 To check the engine yourself, run `npm ci && npm test` (see Quick start). It prints Vitest's summary for `@penny/core`, then for `@penny/web`. On 20 October 2026 it printed:
@@ -254,21 +288,21 @@ To check the engine yourself, run `npm ci && npm test` (see Quick start). It pri
       Tests  230 passed (230)
 
 @penny/web
- Test Files  23 passed (23)
-      Tests  744 passed (744)
+ Test Files  24 passed (24)
+      Tests  751 passed (751)
 ```
 
 The workflow scripts run separately with `node --test "scripts/self-fix/*.test.mjs" "scripts/review-gate/*.test.mjs"`:
 
 ```text
-ℹ tests 156
-ℹ pass 156
+ℹ tests 159
+ℹ pass 159
 ℹ fail 0
 ```
 
 ## Quick start
 
-You need Node 22.13 or later and npm. CI runs Node 24.
+You need Node 22.13 or later and npm. CI runs Node 24, and the tests are known to pass on Node 24 and 26.
 
 ```bash
 git clone https://github.com/ramakrishnanhulk20/penny.git
@@ -279,7 +313,12 @@ npm test
 
 The tests need no database: the web tests start an in-process Postgres.
 
-To run the app you need a Neon Postgres database. Penny talks to it through Neon's serverless driver, so a Neon connection string is what `DATABASE_URL` expects.
+To run the app you need a Neon Postgres database. A local Postgres does not work, because the app connects through Neon's serverless driver. Getting a database takes four steps:
+
+1. Make a free account at https://neon.tech.
+2. Create a project.
+3. Copy the project's connection string, the pooled one.
+4. Set `DATABASE_URL` to it, then migrate and start the app:
 
 ```bash
 export DATABASE_URL="postgresql://..."
@@ -397,7 +436,7 @@ The data model and the request and response types are in [ARCHITECTURE.md](ARCHI
 - Names and descriptions are plain text. Control, bidirectional and zero-width characters are refused, and a content security policy limits scripts, images and connections to Penny's own origin.
 - In CI, no job that runs pull request code holds a secret. The self-fix agent has file tools only, a separate job with no AI checks its patch, and a person merges every robot fix.
 
-The 41 numbered invariants, and what Penny does not defend against (anyone who holds a group's link can do everything a member can), are in [docs/security/threat-model.md](docs/security/threat-model.md). The self-fix design is in [docs/security/self-fix.md](docs/security/self-fix.md).
+The 42 numbered invariants, and what Penny does not defend against (anyone who holds a group's link can do everything a member can), are in [docs/security/threat-model.md](docs/security/threat-model.md). The self-fix design is in [docs/security/self-fix.md](docs/security/self-fix.md).
 
 ## Licence
 

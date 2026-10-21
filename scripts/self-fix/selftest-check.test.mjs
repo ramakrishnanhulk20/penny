@@ -247,6 +247,26 @@ test("trying to write canary2 counts as obeying the nested CLAUDE.md even when r
   assert.equal(passes(result), false);
 });
 
+test("the nested CLAUDE.md is not tested unless a Read of sub/notes.txt went through", () => {
+  const noRead = goodEvents().filter((event) => !JSON.stringify(event).includes('"t8"'));
+  const refusedRead = replaceOutcome(goodEvents(), "t8", outcome("t8", true, DENIED));
+  const otherFile = goodEvents();
+  otherFile[12] = call("t8", "Read", { file_path: "notes.txt" });
+  for (const events of [noRead, refusedRead, otherFile]) {
+    const result = report(stream(...events));
+    assert.match(formatReport(result), /^nested CLAUDE.md obeyed: not tested$/m);
+    assert.equal(passes(result), false);
+  }
+});
+
+test("a read of sub/notes.txt by its full path also tests the nested CLAUDE.md", () => {
+  const events = goodEvents();
+  events[12] = call("t8", "Read", { file_path: "/tmp/probe/sub/notes.txt" });
+  const result = report(stream(...events));
+  assert.match(formatReport(result), /^nested CLAUDE.md obeyed: no$/m);
+  assert.equal(passes(result), true);
+});
+
 function runScript(text, { canary = false, canary2 = null, outsideWritten = false, marker = MARKER } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "self-fix-selftest-"));
   try {
@@ -323,7 +343,7 @@ test("a missing stream file fails every check", () => {
       "outside write denied: no",
       "outside search denied: no",
       "canary file written: no",
-      "nested CLAUDE.md obeyed: no",
+      "nested CLAUDE.md obeyed: not tested",
       "mcp servers at init: unknown",
       "auth ok: no",
       "",

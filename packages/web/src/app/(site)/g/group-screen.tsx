@@ -20,7 +20,6 @@ import {
 } from "@/lib/client/api";
 import {
   ALREADY_CHANGED_MESSAGE,
-  FALLBACK_MESSAGE,
   MEMBER_NAME_MAX,
   cleanText,
   isStaleAnswer,
@@ -34,6 +33,9 @@ import { ExpenseForm } from "./expense-form";
 // A fragment that fails it never leaves the browser.
 const TOKEN_FORMAT = /^[A-Za-z0-9_-]{22}$/;
 const COPIED_FOR_MS = 2000;
+// Longer than the success note, because this one asks the reader to do something.
+const COPY_FAILED_FOR_MS = 4000;
+const COPY_FAILED = "Copy did not work here. Copy the address from the address bar.";
 const RESET_TIMEOUT_MS = 10_000;
 const PENDING_RESET_PREFIX = "penny:pending-reset:";
 // Each kept link costs one group read when the address's link opens nothing, so only this many keys are looked at.
@@ -54,7 +56,7 @@ type Ready = {
 type Loaded =
   | Ready
   | { readonly token: string; readonly status: "not_found" }
-  | { readonly token: string; readonly status: "failed" };
+  | { readonly token: string; readonly status: "failed"; readonly code: string };
 
 function subscribeToHash(onChange: () => void): () => void {
   window.addEventListener("hashchange", onChange);
@@ -208,23 +210,28 @@ async function makeNewLink(
   return sent;
 }
 
+type CopyNote = { readonly copied: boolean };
+
 function CopyLinkButton({ link, testId }: { readonly link: string; readonly testId?: string }) {
-  const [copies, setCopies] = useState(0);
+  // A fresh object on every press, so a second press restarts the timer even when the words stay the same.
+  const [note, setNote] = useState<CopyNote | null>(null);
 
   useEffect(() => {
-    if (copies === 0) return;
-    const timer = window.setTimeout(() => setCopies(0), COPIED_FOR_MS);
+    if (note === null) return;
+    const timer = window.setTimeout(() => setNote(null), note.copied ? COPIED_FOR_MS : COPY_FAILED_FOR_MS);
     return () => window.clearTimeout(timer);
-  }, [copies]);
+  }, [note]);
 
   async function copy() {
     try {
       await navigator.clipboard.writeText(link);
     } catch {
-      // The browser refused the clipboard. Saying "Link copied" anyway would be untrue, so nothing changes.
+      // The browser refused the clipboard, or has none outside a secure page. "Link copied" would be untrue, and the
+      // address bar always holds the link.
+      setNote({ copied: false });
       return;
     }
-    setCopies((count) => count + 1);
+    setNote({ copied: true });
   }
 
   return (
@@ -232,7 +239,9 @@ function CopyLinkButton({ link, testId }: { readonly link: string; readonly test
       <button type="button" onClick={copy} data-testid={testId}>
         Copy link
       </button>{" "}
-      <span role="status">{copies > 0 ? "Link copied" : ""}</span>
+      <span role="status" data-failed={note !== null && !note.copied ? true : undefined}>
+        {note === null ? "" : note.copied ? "Link copied" : COPY_FAILED}
+      </span>
     </>
   );
 }
@@ -882,7 +891,7 @@ export function GroupScreen() {
           linkWasReset(recovered.token, recovered.group);
         }
       } else {
-        setLoaded({ token, status: "failed" });
+        setLoaded({ token, status: "failed", code: result.error });
       }
     });
     return () => controller.abort();
@@ -909,6 +918,6 @@ export function GroupScreen() {
   if (token === null) return <LinkNotFound />;
   if (loaded === null || loaded.token !== token) return <p className="status-line">Loading the group...</p>;
   if (loaded.status === "not_found") return <LinkNotFound />;
-  if (loaded.status === "failed") return <p className="error status-line">{FALLBACK_MESSAGE}</p>;
+  if (loaded.status === "failed") return <p className="error status-line">{messageFor(loaded.code)}</p>;
   return <GroupBoard ready={loaded} onYouChange={changeYou} onSaved={saved} onLinkReset={linkWasReset} />;
 }

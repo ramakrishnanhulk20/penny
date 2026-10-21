@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { ChecksSnapshot, PrCheck } from "@/lib/checks";
+import type { ChecksSnapshot, VerdictCounts } from "@/lib/checks";
+import { messageFor } from "@/lib/client/messages";
 
-type Loaded = { readonly status: "ready"; readonly snapshot: ChecksSnapshot } | { readonly status: "failed" };
+// `answer` is the HTTP status, or null when no readable answer arrived.
+type Loaded =
+  | { readonly status: "ready"; readonly snapshot: ChecksSnapshot }
+  | { readonly status: "failed"; readonly answer: number | null };
 
 // A shape check only: the server validated every field and built every link before sending them.
 function isSnapshot(body: unknown): body is ChecksSnapshot {
@@ -28,12 +32,17 @@ async function loadChecks(signal: AbortSignal): Promise<Loaded> {
       referrerPolicy: "no-referrer",
       signal,
     });
-    if (!response.ok) return { status: "failed" };
+    if (!response.ok) return { status: "failed", answer: response.status };
     const body: unknown = await response.json();
-    return isSnapshot(body) ? { status: "ready", snapshot: body } : { status: "failed" };
+    return isSnapshot(body) ? { status: "ready", snapshot: body } : { status: "failed", answer: null };
   } catch {
-    return { status: "failed" };
+    return { status: "failed", answer: null };
   }
+}
+
+/** What /checks says when it could not load: how long to wait after a rate limit, otherwise that checks are down. */
+export function checksFailureLine(answer: number | null): string {
+  return answer === 429 ? messageFor("rate_limited") : "Checks are not available right now.";
 }
 
 function liveLine(live: ChecksSnapshot["live"]): string {
@@ -44,8 +53,8 @@ function liveLine(live: ChecksSnapshot["live"]): string {
     : `This site runs commit ${short} from pull request #${live.pr}.`;
 }
 
-/** The TestSprite line under one pull request, from its verdict and counts alone. */
-export function verdictLine(pr: PrCheck): string {
+/** The TestSprite line for one pull request, from its verdict and counts alone. */
+export function verdictLine(pr: VerdictCounts): string {
   const blocked = pr.blocked !== null && pr.blocked > 0 ? `, ${pr.blocked} blocked` : "";
   if (pr.verdict === "blocked" && pr.blocked !== null && pr.total !== null) {
     return `TestSprite: blocked, ${pr.blocked} of ${pr.total} could not run`;
@@ -80,7 +89,7 @@ export function ChecksScreen() {
   }, []);
 
   if (loaded === null) return <p className="status-line">Reading the latest checks...</p>;
-  if (loaded.status === "failed") return <p className="status-line">Checks are not available right now.</p>;
+  if (loaded.status === "failed") return <p className="status-line">{checksFailureLine(loaded.answer)}</p>;
   const { snapshot } = loaded;
 
   return (
@@ -90,6 +99,11 @@ export function ChecksScreen() {
         <p data-testid="checks-live" className="live-line">
           {liveLine(snapshot.live)}
         </p>
+        {snapshot.live.verdict ? (
+          <p data-testid="checks-live-verdict" data-verdict={snapshot.live.verdict.verdict} className="live-verdict">
+            {verdictLine(snapshot.live.verdict)}
+          </p>
+        ) : null}
       </section>
 
       <section className="card">
@@ -106,7 +120,7 @@ export function ChecksScreen() {
                 </a>
                 {pr.reportUrl !== null && (
                   <a href={pr.reportUrl} rel="noreferrer">
-                    Test report
+                    Test report (TestSprite sign-in)
                   </a>
                 )}
               </div>

@@ -28,9 +28,9 @@ You can change the base currency only while the group has never had an expense o
 
 ## The rate
 
-An expense in a currency other than the base needs a rate. The form shows a field labelled "Rate to EUR", with the base currency's code in place of EUR. Penny prefills it with the European Central Bank reference rate for the latest day, labelled with its date, for example "ECB reference rate, 2026-10-19". You can type your own rate instead, and the one you enter is the one that counts.
+An expense in a currency other than the base needs a rate. The form shows a field labelled "Rate to EUR", with the base currency's code in place of EUR. When the European Central Bank publishes a rate for that pair, Penny prefills it with the reference rate for the latest day, labelled with its date, for example "ECB reference rate, 2026-10-19". Otherwise you type the rate. You can always type your own rate instead, and the one you enter is the one that counts.
 
-If no rate can be fetched, the form says "No reference rate available. Enter the rate you used." Penny never fills in a default.
+If no rate can be fetched, including for a pair the ECB does not publish, the form says "No reference rate available. Enter the rate you used." Penny never fills in a default.
 
 A rate is an exact decimal: more than 0, up to 1,000,000, with at most 10 digits after the point. The form says "Enter a rate like 0.92." for anything else and "Enter the rate to EUR." when the field is empty. A rate on an expense that is already in the base currency is refused rather than ignored.
 

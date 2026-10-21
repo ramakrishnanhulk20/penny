@@ -1,5 +1,5 @@
-// Not covered: rate limits on group creation (not built yet), the headers next.config.ts adds, response timing,
-// or the Neon driver (this runs on in-memory PGlite).
+// Not covered: rate limits on group creation (hardening.test.ts holds those), the headers next.config.ts adds,
+// response timing, or the Neon driver (this runs on in-memory PGlite).
 import { asc, count, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { POST as createGroupRoute } from "@/app/api/groups/route";

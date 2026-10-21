@@ -17,15 +17,16 @@ export type PrCheck = {
   reportUrl: string | null;
   prUrl: string;
 };
+export type VerdictCounts = Pick<PrCheck, "verdict" | "passed" | "failed" | "blocked" | "total">;
 export type ChecksSnapshot = {
-  live: { sha: string | null; pr: number | null };
+  // `verdict` is TestSprite's verdict on the head commit of pull request `pr`, and null whenever `pr` is null.
+  live: { sha: string | null; pr: number | null; verdict: VerdictCounts | null };
   prs: PrCheck[];
   fetchedAt: string;
   stale: boolean;
 };
 
 type Counts = Pick<PrCheck, "passed" | "failed" | "blocked" | "total">;
-type VerdictCounts = Pick<PrCheck, "verdict" | "passed" | "failed" | "blocked" | "total">;
 type TestSpriteResult = VerdictCounts & Pick<PrCheck, "reportUrl">;
 
 const GITHUB_API_ORIGIN = "https://api.github.com";
@@ -44,6 +45,9 @@ const PULLS_PER_PAGE = 50;
 const PR_LIMIT = 12;
 // Statuses come newest first, so the first page holds the newest TestSprite one; later pages are never fetched.
 const STATUSES_PER_PAGE = 100;
+// For a commit on the default branch GitHub lists only the merged pull request that brought it in, so one short page
+// holds it and stays far under the response size cap.
+const COMMIT_PULLS_PER_PAGE = 10;
 const CALL_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const REFRESH_EVERY_MS = 15 * 60 * 1000;
@@ -231,6 +235,13 @@ function statusesUrl(sha: string): URL {
   return url;
 }
 
+// sha has already passed SHA_FORMAT, so the path is fixed text plus 40 hex digits.
+function commitPullsUrl(sha: string): URL {
+  const url = new URL(`/repos/${REPO}/commits/${sha}/pulls`, GITHUB_API_ORIGIN);
+  url.searchParams.set("per_page", String(COMMIT_PULLS_PER_PAGE));
+  return url;
+}
+
 const pullListSchema = z.array(
   z.object({
     number: z.int().positive(),
@@ -284,11 +295,22 @@ function prState(pull: Pull): PrCheck["state"] {
   return pull.merged_at === null ? "closed" : "merged";
 }
 
+// Asked of GitHub by the commit itself, so the live pull request is found however many newer ones push it off the list.
+async function findLivePull(fetchImpl: typeof fetch, sha: string, token: string | null): Promise<Pull | null> {
+  const associated = pullListSchema.parse(await getJson(fetchImpl, commitPullsUrl(sha), token));
+  const owned = associated
+    .filter((pull) => pull.user?.id === OWNER_ID && pull.merged_at !== null && pull.merge_commit_sha === sha)
+    .sort((a, b) => b.number - a.number);
+  return owned[0] ?? null;
+}
+
 /**
  * Reads the 50 newest pull requests of the Penny repository, keeps the ones the owner's account opened, and reads the
- * TestSprite verdict on the head commit of the 12 newest of those, live from the GitHub API, in at most 13 calls. The
- * running commit comes from VERCEL_GIT_COMMIT_SHA and its pull request from the owner's merged PR whose merge commit it
- * is. The token, when given, is sent to api.github.com only.
+ * TestSprite verdict on the head commit of the 12 newest of those, live from the GitHub API. The running commit comes
+ * from VERCEL_GIT_COMMIT_SHA; its pull request is the owner's merged PR whose merge commit it is, looked up by that
+ * commit, and its verdict is read from that PR's head commit by the same rules as a listed one. At most 15 calls: the
+ * list, 12 status reads, the running commit's pull requests, and one more status read only when the live pull request
+ * is not among the 12. The token, when given, is sent to api.github.com only.
  * Throws when any call fails, times out after 5 s, answers anything but 200, redirects, sends more than 1 MB or sends
  * a pull request list in an unexpected shape. Pagination links are never followed.
  */
@@ -298,7 +320,11 @@ export async function fetchSnapshot(fetchImpl: typeof fetch, token: string | nul
     .filter((pull) => pull.user?.id === OWNER_ID)
     .sort((a, b) => b.number - a.number)
     .slice(0, PR_LIMIT);
-  const statuses = await Promise.all(pulls.map((pull) => getJson(fetchImpl, statusesUrl(pull.head.sha), token)));
+  const sha = runningCommit();
+  const [statuses, livePull] = await Promise.all([
+    Promise.all(pulls.map((pull) => getJson(fetchImpl, statusesUrl(pull.head.sha), token))),
+    sha === null ? null : findLivePull(fetchImpl, sha, token),
+  ]);
   const prs = pulls.map(
     (pull, index): PrCheck => ({
       number: pull.number,
@@ -309,15 +335,45 @@ export async function fetchSnapshot(fetchImpl: typeof fetch, token: string | nul
       prUrl: prUrlFor(pull.number),
     }),
   );
-  const sha = runningCommit();
-  const livePull = sha === null ? undefined : pulls.find((pull) => pull.merged_at !== null && pull.merge_commit_sha === sha);
-  return { live: { sha, pr: livePull?.number ?? null }, prs, fetchedAt: new Date().toISOString(), stale: false };
+  let verdict: VerdictCounts | null = null;
+  if (livePull !== null) {
+    const listed = pulls.findIndex((pull) => pull.number === livePull.number);
+    const liveStatuses = listed >= 0 ? statuses[listed] : await getJson(fetchImpl, statusesUrl(livePull.head.sha), token);
+    const result = testSpriteResult(liveStatuses);
+    verdict = {
+      verdict: result.verdict,
+      passed: result.passed,
+      failed: result.failed,
+      blocked: result.blocked,
+      total: result.total,
+    };
+  }
+  return {
+    live: { sha, pr: livePull?.number ?? null, verdict },
+    prs,
+    fetchedAt: new Date().toISOString(),
+    stale: false,
+  };
 }
 
 const countSchema = z.int().nonnegative().nullable();
 
+const verdictShape = {
+  verdict: z.enum(["passed", "failed", "blocked", "running", "not run", "unknown"]),
+  passed: countSchema,
+  failed: countSchema,
+  blocked: countSchema,
+  total: countSchema,
+};
+
 const storedSnapshotSchema = z.object({
-  live: z.object({ sha: z.string().regex(SHA_FORMAT).nullable(), pr: z.int().positive().nullable() }),
+  live: z.object({
+    sha: z.string().regex(SHA_FORMAT).nullable(),
+    pr: z.int().positive().nullable(),
+    // A row stored before the live verdict existed has none. It reads as no verdict, not as no good read, so the page
+    // does not go blank for a refresh window right after this ships.
+    verdict: z.object(verdictShape).nullable().default(null),
+  }),
   prs: z
     .array(
       z.object({
@@ -325,11 +381,7 @@ const storedSnapshotSchema = z.object({
         title: z.string(),
         state: z.enum(["open", "merged", "closed"]),
         headSha: z.string().regex(SHA_FORMAT),
-        verdict: z.enum(["passed", "failed", "blocked", "running", "not run", "unknown"]),
-        passed: countSchema,
-        failed: countSchema,
-        blocked: countSchema,
-        total: countSchema,
+        ...verdictShape,
         reportUrl: z.string().nullable(),
         prUrl: z.string(),
       }),
@@ -395,7 +447,7 @@ async function saveSnapshot(tx: Db, payload: ChecksSnapshot | typeof NO_GOOD_REA
 // previous deployment read. This instance knows its own commit; until the next refresh its pull request is unknown.
 function forThisDeployment(snapshot: ChecksSnapshot): ChecksSnapshot {
   const sha = runningCommit();
-  return snapshot.live.sha === sha ? snapshot : { ...snapshot, live: { sha, pr: null } };
+  return snapshot.live.sha === sha ? snapshot : { ...snapshot, live: { sha, pr: null, verdict: null } };
 }
 
 /**

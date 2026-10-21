@@ -8,7 +8,8 @@ import { LIMITS, clientNetwork, networkKey, takeRateLimit, tooMany } from "@/lib
 export const maxDuration = 10;
 
 /**
- * How Penny is tested, read from GitHub: the running commit and the TestSprite verdict on each recent pull request.
+ * How Penny is tested, read from GitHub: the running commit with the TestSprite verdict of the pull request it came
+ * from, and the TestSprite verdict on each recent pull request.
  * Takes no input that changes what is fetched: no query, body or header does (threat model C21). The client address
  * only counts against LIMITS.groupRead.
  * 200 ChecksSnapshot; when GitHub did not answer, the last good read with stale: true.

@@ -585,6 +585,10 @@ main.app [role="status"] {
   color: var(--ok);
 }
 
+main.app [role="status"][data-failed] {
+  color: var(--error);
+}
+
 /* An empty status span still takes a gap in its row, so the gap is taken back until it has words. */
 main.app [role="status"]:empty {
   margin-left: -10px;
@@ -878,6 +882,21 @@ main.app .live-line {
   font-family: var(--font-mono), ui-monospace, monospace;
   font-size: 14px;
   color: var(--paper);
+}
+
+main.app .live-verdict {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+main.app .live-verdict[data-verdict="passed"] {
+  color: var(--ok);
+}
+
+main.app .live-verdict[data-verdict="failed"] {
+  color: var(--error);
 }
 
 main.app .checks-pr {
