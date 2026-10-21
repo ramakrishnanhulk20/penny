@@ -1,0 +1,76 @@
+name: api-suite
+# The API tests carry a fixed address, so they run against production after each merge rather than on a
+# preview. Production must serve the merged commit first, or the run would judge the commit before it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+# A newer merge makes an older run's verdict moot, so the older run is cancelled.
+concurrency:
+  group: api-suite
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  api-suite:
+    runs-on: ubuntu-24.04
+    # Up to 15 minutes waiting for the deploy, then the TestSprite runs, each capped at 10 minutes by the CLI.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Say that no API project is set
+        if: vars.TESTSPRITE_API_PROJECT_ID == ''
+        run: echo "vars.TESTSPRITE_API_PROJECT_ID is empty, so there is no TestSprite API project to run."
+      - name: Check out the CLI lockfile
+        if: vars.TESTSPRITE_API_PROJECT_ID != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: /tools/self-fix/
+          sparse-checkout-cone-mode: false
+      - if: vars.TESTSPRITE_API_PROJECT_ID != ''
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      # The lockfile pins every package by version and integrity hash, transitive ones included.
+      - name: Install the TestSprite CLI from the lockfile without running install scripts
+        if: vars.TESTSPRITE_API_PROJECT_ID != ''
+        run: |
+          npm ci --ignore-scripts --prefix tools/self-fix
+          echo "$GITHUB_WORKSPACE/tools/self-fix/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Wait until production serves this commit
+        if: vars.TESTSPRITE_API_PROJECT_ID != ''
+        env:
+          WANT_SHA: ${{ github.sha }}
+        run: |
+          deadline=$((SECONDS + 15 * 60))
+          while :; do
+            live="$(curl -fsS --max-time 10 https://penny-self.vercel.app/api/checks | jq -r '.live.sha // empty' || true)"
+            if [ "$live" = "$WANT_SHA" ]; then
+              echo "production serves $WANT_SHA"
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "production still serves ${live:-no readable commit} after 15 minutes, not $WANT_SHA"
+              exit 1
+            fi
+            echo "production serves ${live:-no readable commit}, waiting for $WANT_SHA"
+            sleep 15
+          done
+      - name: Run every test in the TestSprite API project and wait for the verdict
+        if: vars.TESTSPRITE_API_PROJECT_ID != ''
+        env:
+          TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
+          TESTSPRITE_NO_TELEMETRY: "1"
+          TESTSPRITE_NO_UPDATE_NOTIFIER: "1"
+          PROJECT_ID: ${{ vars.TESTSPRITE_API_PROJECT_ID }}
+        run: testsprite test run --all --project "$PROJECT_ID" --wait
