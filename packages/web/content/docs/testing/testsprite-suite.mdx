@@ -1,9 +1,9 @@
 ---
 title: "The TestSprite suite"
-description: "The 24 browser tests that run on every pull request, how they are written, and how the required check holds the merge."
+description: "The 24 browser tests that run on every pull request, the 16 API tests that run after every merge, how they are written, and how the required check holds the merge."
 ---
 
-TestSprite is a testing service that drives a real browser. For every pull request to Penny it opens that pull request's own preview and runs 24 tests against it. GitHub will not merge the pull request until TestSprite's check is green.
+TestSprite is a testing service that drives a real browser. For every pull request to Penny it opens that pull request's own preview and runs 24 tests against it. GitHub will not merge the pull request until TestSprite's check is green. A second TestSprite project, [the API tests](#the-16-api-tests), calls Penny's API on the live site after every merge.
 
 ## The 24 tests
 
@@ -40,10 +40,41 @@ That is 7 tests on groups and members, 5 on splitting, 2 on currency, 2 on corre
 
 ## How the tests are written
 
+- Planned from the spec, then cut by hand. TestSprite proposed 57 tests from the [product spec](https://github.com/ramakrishnanhulk20/penny/blob/main/docs/prd.md). 12 were kept at the start, after dropping duplicates and tests for features not yet built, and each was rewritten with fixed data and exact expected text before TestSprite ran it. The suite grew with the product, to 14, 16 and then 21 tests as features landed, and to 24 after the study.
 - Fixed data. Names, amounts, currencies and rates are chosen in advance, so the right answer is known before the test runs.
 - Exact expected text. A test checks what is written on the page, not just that the page loaded. Examples: "33.34" for the leftover cent, "155.74 EUR" for a balance, and "3 payments settle 7 expenses." for the sample trip.
 - Each test makes its own group. Every test starts from the home page and creates a fresh group, so tests never share state and a failure points at one behaviour. No test depends on a fixed production group, because anyone can edit a group whose link appears in a public test file or report.
 - No back door. Production has no seed, reset or bypass endpoint, flag or header for tests. TestSprite's browsers get exactly what an anonymous visitor gets.
+
+## The 16 API tests
+
+A second TestSprite project calls Penny's API directly, with no browser. A backend test carries a fixed address, so these run against production, not a preview. After each merge to `main`, the `api-suite` workflow waits until the live site serves the merged commit, then runs every test in the project. A failure fails that workflow run on the merge commit.
+
+| Area | Test |
+| --- | --- |
+| Groups and links | The health check answers up. |
+| Groups and links | Create a group, and refuse each broken create with its own code. |
+| Groups and links | Members join once per name, and the base currency locks once money is recorded. |
+| Groups and links | A link opens only its own group, and a reset link closes the old one. |
+| Money | Split 100.00 EUR equally three ways to the cent. |
+| Money | Split by shares with one person left out, and by exact amounts. |
+| Money | Yen amounts have no decimals. |
+| Money | Convert at a rate that lands on half a cent. |
+| Money | Settle up in the fewest payments when the simple plan needs more. |
+| Money | Sample trip: exact balances and a three-payment plan. |
+| Corrections and payments | The same expense sent twice is saved once. |
+| Corrections and payments | Edits and deletes from an old version are refused. |
+| Corrections and payments | Paying the plan settles everyone, and undo brings the debt back. |
+| Edges of the API | ECB reference rate lookup. |
+| Edges of the API | Request bodies are capped at 16 KiB. |
+| Edges of the API | Error answers carry only a code. |
+
+- Whole answers. A test compares the full balance list, the full settle-up plan or the full error body, for example `{"error": {"code": "stale_version"}}`, never a single field or just a status.
+- Hand-worked numbers. Each expected amount was worked out from the money rules, with the working in a comment beside it, never copied from what the server returned.
+- Checked to fail. Each test ran twice against production, then once with one expected value changed, and that copy failed.
+- Plain files. The tests are Python files in [testsprite/api](https://github.com/ramakrishnanhulk20/penny/tree/main/testsprite/api). `PENNY_BASE_URL` points one at another server, such as a local copy.
+
+A full run makes about 20 groups named "API suite: ..." on production. They hold made-up data and open only with their own links.
 
 ## What happens on a pull request
 
@@ -115,4 +146,4 @@ The suite now catches all 8 planted bugs.
 
 ## What the suite does not cover
 
-A green check means TestSprite's tests passed, nothing more. The 24 tests cover groups, splitting, currency, corrections and settling in a browser, against a preview with synthetic data. They say nothing about how the home page looks or animates. Message wording for every server error code, limits, rate limiting and the database rules are covered by the unit and database tests on [Unit and property tests](./unit-and-property-tests.mdx), not by these.
+A green check means TestSprite's tests passed, nothing more. The 24 tests cover groups, splitting, currency, corrections and settling in a browser, against a preview with synthetic data. They say nothing about how the home page looks or animates. The API tests check error codes and the 16 KiB body cap on production, but never trip a rate limit. Message wording for every server error code, rate limiting and the database rules are covered by the unit and database tests on [Unit and property tests](./unit-and-property-tests.mdx).

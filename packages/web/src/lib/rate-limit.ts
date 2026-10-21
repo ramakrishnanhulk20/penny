@@ -16,7 +16,7 @@ const SWEEP_OLDER_THAN_MS = 10 * 60 * 1000;
 const SWEEP_EVERY_MS = 60 * 1000;
 
 /**
- * The request limits, each a fixed window per client network unless named per group. TestSprite runs up to 21 tests
+ * The request limits, each a fixed window per client network unless named per group. TestSprite runs up to 24 tests
  * at once, sometimes two runs together, from a few cloud addresses, which is why the per-network numbers are not
  * lower. groupRead also counts /api/checks, so its bucket is named for every read. groupReadPerGroup holds one
  * group's reads from every network together, so a stranger spread over many addresses still cannot make the server

@@ -25,8 +25,8 @@ The `maintainer-review` gate did not exist yet; it arrived in PR #11. From then 
 | Judging line | Where to see it |
 | --- | --- |
 | Project quality: does the live app work well | The [live app](https://penny-self.vercel.app) and [the two-minute judge path](#the-two-minute-judge-path). Every number on every screen, the home page's animation included, comes from the money engine. |
-| Coverage breadth | 24 browser tests across groups, splitting, currency, corrections and settling ([the list](#what-the-suite-covers)), plus unit, property and database tests in three packages. |
-| Assertion depth | The browser tests assert exact values ("33.34", "155.74 EUR", "3 payments settle 7 expenses."), not that a page loaded. The planted bug in PR #10 moved one cent and three of them failed. The money engine's tests kill 91.29 percent of StrykerJS mutants (measured 20 October 2026 by a clean clone). A [planted-bug study](#planted-bug-study): 8 one-change bugs, 5 caught by the first 21 tests, all 8 after three tests aimed at the misses were added. |
+| Coverage breadth | 24 browser tests across groups, splitting, currency, corrections and settling ([the list](#what-the-suite-covers)), 16 [API tests](#testsprite-16-api-tests-after-every-merge) that call the live API after every merge, plus unit, property and database tests in three packages. |
+| Assertion depth | The browser tests assert exact values ("33.34", "155.74 EUR", "3 payments settle 7 expenses."), not that a page loaded. The planted bug in PR #10 moved one cent and three of them failed. The money engine's tests kill 91.29 percent of StrykerJS mutants (measured 20 October 2026 by a clean clone). A [planted-bug study](#planted-bug-study): 8 one-change bugs, 5 caught by the first 21 tests, all 8 after three tests aimed at the misses were added. The API tests compare whole answers, exact money strings and exact error bodies, and each one failed when a single expected value in it was changed. |
 | Scenario design | Each browser test starts from the home page with its own fresh group and fixed data, so tests never share state and a failure points at one behaviour. |
 | Fires on every pull request | Every pull request since the suite existed carries a `TestSprite V3` status; [/checks](https://penny-self.vercel.app/checks) lists them with their counts. |
 | Holds the merge | `main` requires `TestSprite V3`, pinned to TestSprite's app, for administrators too. PR #10 could not merge while it was red. |
@@ -107,6 +107,19 @@ The names are TestSprite's own. The first 21 are listed in its [comment on PR #1
 | Balances and settling (5) | Two opposite expenses settle everyone to zero. Settle a four-person trip in two payments. Open a sample trip with exact balances and a three-payment plan. Mark payments as paid until everyone is settled. Undo a payment and the debt comes back. |
 | Added after the study (3) | Convert at a rate that lands on half a cent. Settle up in the fewest payments when the simple plan needs more. Reset link: the old link opens nothing and the new one opens the group. |
 
+### TestSprite: 16 API tests after every merge
+
+A second TestSprite project calls Penny's API directly, with no browser. Its tests carry a fixed address, so they run against production: after each merge the `api-suite` workflow waits until the live site serves the merged commit, then runs the whole project. The tests are plain Python files in [testsprite/api](testsprite/api). Set `PENNY_BASE_URL` to run one against another server, for example `PENNY_BASE_URL=http://localhost:3000 python testsprite/api/03_equal_split_to_the_cent.py`.
+
+| Area | Tests |
+| --- | --- |
+| Groups and links (4) | The health check answers up. Create a group, and refuse each broken create with its own code. Members join once per name, and the base currency locks once money is recorded. A link opens only its own group, and a reset link closes the old one. |
+| Money (6) | Split 100.00 EUR equally three ways to the cent. Split by shares with one person left out, and by exact amounts. Yen amounts have no decimals. Convert at a rate that lands on half a cent. Settle up in the fewest payments when the simple plan needs more. Sample trip: exact balances and a three-payment plan. |
+| Corrections and payments (3) | The same expense sent twice is saved once. Edits and deletes from an old version are refused. Paying the plan settles everyone, and undo brings the debt back. |
+| Edges of the API (3) | ECB reference rate lookup. Request bodies are capped at 16 KiB. Error answers carry only a code. |
+
+Each test makes its own groups and compares whole answers: balances such as `{"memberId": ..., "amount": "-33.33"}`, and errors such as `{"error": {"code": "stale_version"}}`. Each was run twice against production, then once with one expected value changed, and that copy failed. A full run leaves about 20 groups named "API suite: ..." in production. They hold made-up data and open only with their own links.
+
 ### Unit and property tests, by package
 
 1,140 tests, all passing on 20 October 2026: 230 for the money engine, 751 for the app, 159 for the workflow scripts. Every test file names what it does not cover in its first lines.
@@ -135,7 +148,7 @@ The names are TestSprite's own. The first 21 are listed in its [comment on PR #1
 - A test that fails if the two workflows pass Claude Code different flags.
 - The review gate: when `maintainer-review` is pending and when it is green.
 
-The sandbox self-test ran on a real GitHub runner (run [39412452841](https://github.com/ramakrishnanhulk20/penny/actions/runs/39412452841)) and printed:
+The sandbox self-test ran on a real GitHub runner (run [39551053981](https://github.com/ramakrishnanhulk20/penny/actions/runs/39551053981)) and printed:
 
 ```text
 environ read denied: yes
@@ -394,11 +407,12 @@ The data model and the request and response types are in [ARCHITECTURE.md](ARCHI
 │       ├── drizzle/           SQL migrations and their journal
 │       ├── scripts/migrate.ts The migration step run before every build
 │       └── test/              API, security and database tests (PGlite)
+├── testsprite/api/            The 16 API tests, one Python file each
 ├── scripts/
 │   ├── self-fix/              Gate, patch checker, failure fetcher, sandbox self-test reader
 │   └── review-gate/           The maintainer-review status
 ├── tools/self-fix/            Lockfile pinning the two CLIs the self-fix runs
-├── .github/workflows/         ci, self-fix, self-fix-selftest, maintainer-review, neon-cleanup
+├── .github/workflows/         ci, self-fix, self-fix-selftest, maintainer-review, neon-cleanup, api-suite
 ├── docs/
 │   ├── prd.md                 What Penny does, screen by screen
 │   └── security/              threat-model.md and self-fix.md
